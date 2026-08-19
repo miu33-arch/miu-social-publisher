@@ -9,7 +9,7 @@ export function validateServiceKey(defaultServiceCode = "reel_30s") {
       req.body.api_key ||
       "miu_live_master_9f8a3c2b1a";
 
-    // 2. Determine service code (dynamic based on video duration or passed parameter)
+    // 2. Determine service code
     let serviceCode = defaultServiceCode;
     if (req.body.duration) {
       const dur = Number(req.body.duration);
@@ -22,11 +22,10 @@ export function validateServiceKey(defaultServiceCode = "reel_30s") {
       let requiredCredits = null;
       let serviceName = "API Dispatch";
 
-      // 3. If serviceCode is a number, treat it directly as credit cost fallback
+      // 3. Credit cost resolution
       if (typeof serviceCode === "number") {
         requiredCredits = serviceCode;
       } else {
-        // Look up credit cost from public.services table
         const { data: service } = await supabase
           .from("services")
           .select("*")
@@ -37,16 +36,16 @@ export function validateServiceKey(defaultServiceCode = "reel_30s") {
           requiredCredits = service.credit_cost;
           serviceName = service.service_name;
         } else {
-          // Hardcoded fallback map if service isn't in Supabase DB yet
+          // Hardcoded fallback map aligned with UI costs
           const FALLBACK_COSTS = {
             sales_agent: 1,
             proposal_gen: 1,
-            search_vault: 1, // 🔍 Added search_vault (1 credit)
-            voice_call: 5,
-            reel_15s: 5,
-            reel_30s: 10,
-            reel_60s: 15,
-            archicad_bim: 10, // 🏗️ Archicad + Tapir BIM execution
+            search_vault: 1,
+            voice_call: 10,
+            reel_15s: 15,
+            reel_30s: 25,     // Aligned with (25 Credits) in UI
+            reel_60s: 40,
+            archicad_bim: 10,
           };
 
           requiredCredits = FALLBACK_COSTS[serviceCode] !== undefined ? FALLBACK_COSTS[serviceCode] : Number(serviceCode);
@@ -79,14 +78,22 @@ export function validateServiceKey(defaultServiceCode = "reel_30s") {
         });
       }
 
-      // 6. Deduct Credits
+      // 6. Deduct Credits from 'clients' table
       const newBalance = client.credit_balance - requiredCredits;
       await supabase
         .from("clients")
         .update({ credit_balance: newBalance })
         .eq("id", client.id);
 
-      // 7. Log Usage
+      // 7. Sync deduction to 'profiles' table if user_id exists
+      if (client.user_id) {
+        await supabase
+          .from("profiles")
+          .update({ credit_balance: newBalance })
+          .eq("id", client.user_id);
+      }
+
+      // 8. Log Usage
       await supabase.from("api_logs").insert({
         client_id: client.id,
         endpoint: String(serviceCode),
@@ -106,5 +113,4 @@ export function validateServiceKey(defaultServiceCode = "reel_30s") {
   };
 }
 
-// Alias export for backward compatibility
 export const validateApiKeyAndCredits = validateServiceKey;

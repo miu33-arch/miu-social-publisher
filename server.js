@@ -259,31 +259,75 @@ app.post("/api/billing/polar-checkout", async (req, res) => {
 app.post("/api/billing/polar-webhook", async (req, res) => {
   try {
     const event = req.body;
+    console.log(`\n🔔 [Polar Webhook]: Received event -> ${event.type}`);
 
-    if (event.type === "order.created" || event.type === "checkout.updated") {
-      const metadata = event.data?.metadata || event.data?.checkout?.metadata || {};
-      const { user_id, credits_to_add } = metadata;
+    if (
+      event.type === "order.created" ||
+      event.type === "order.paid" ||
+      event.type === "checkout.updated"
+    ) {
+      const data = event.data || {};
+      const metadata = data.metadata || data.checkout?.metadata || {};
 
-      if (user_id && credits_to_add) {
-        const { data: client } = await supabase
+      const userId = metadata.user_id;
+      const creditsToAdd = Number(metadata.credits_to_add || 500);
+      const customerEmail =
+        data.customer?.email ||
+        data.customer_email ||
+        data.user?.email ||
+        null;
+
+      console.log(`📦 [Polar Payload]:`, { userId, creditsToAdd, customerEmail });
+
+      // 1. Locate client record by user_id first, then fallback to email
+      let client = null;
+      if (userId) {
+        const { data: foundById } = await supabase
           .from("clients")
-          .select("credit_balance")
-          .eq("user_id", user_id)
-          .single();
+          .select("*")
+          .eq("user_id", userId)
+          .maybeSingle();
+        client = foundById;
+      }
 
-        if (client) {
-          const newBalance = client.credit_balance + Number(credits_to_add);
+      if (!client && customerEmail) {
+        const { data: foundByEmail } = await supabase
+          .from("clients")
+          .select("*")
+          .eq("client_name", customerEmail)
+          .maybeSingle();
+        client = foundByEmail;
+      }
 
+      // 2. Increment balances and set PRO tier
+      if (client) {
+        const newBalance = (client.credit_balance || 0) + creditsToAdd;
+
+        // Update clients table
+        await supabase
+          .from("clients")
+          .update({ credit_balance: newBalance, is_paid: true })
+          .eq("id", client.id);
+
+        // Sync to profiles table
+        if (client.user_id) {
           await supabase
-            .from("clients")
-            .update({ credit_balance: newBalance, is_paid: true })
-            .eq("user_id", user_id);
-
-          console.log(`🌍 [Polar Top-Up] User ${user_id} topped up +${credits_to_add} Credits | New Balance: ${newBalance}`);
+            .from("profiles")
+            .update({ credit_balance: newBalance, tier: "PRO" })
+            .eq("id", client.user_id);
         }
+
+        console.log(
+          `✅ [Polar Top-Up]: ${client.client_name || customerEmail} credited +${creditsToAdd}. New balance: ${newBalance}`
+        );
+      } else {
+        console.warn(
+          `⚠️ [Polar Webhook]: Could not find client record for userId: "${userId}" or email: "${customerEmail}"`
+        );
       }
     }
 
+    // Always acknowledge receipt to Polar
     res.status(200).json({ received: true });
   } catch (err) {
     console.error("❌ Polar Webhook Error:", err);
@@ -553,7 +597,7 @@ app.post("/api/archicad/execute", validateApiKeyAndCredits("archicad_bim"), asyn
   });
 });
 
-// 🎬 Video Generation Route
+// 🎬 Video Generation Route (With LLM Script Synthesis)
 app.post("/api/generate", validateApiKeyAndCredits("reel_30s"), async (req, res) => {
   const { topic, duration = 30, aspectRatio = "9:16", stylePreset = "cyberpunk" } = req.body;
 
@@ -564,7 +608,39 @@ app.post("/api/generate", validateApiKeyAndCredits("reel_30s"), async (req, res)
   const isPaid = req.client.is_paid || (req.client.credit_balance > 100);
 
   try {
+    // 1. Synthesize conversational voiceover narration via Gemini
+    let narrationScript = topic;
+    try {
+      const scriptResponse = await ai.models.generateContent({
+        model: "gemini-2.5-flash",
+        contents: [
+          {
+            role: "user",
+            parts: [
+              {
+                text: `Write a punchy, engaging, ${duration}-second spoken voiceover narration script about this concept: "${topic}".
+STRICT RULES:
+- Do NOT include camera movements, shot types (e.g. whip-pan, 9:16), aspect ratios, visual descriptions, or scene tags.
+- Do NOT use emojis, speaker labels, or hashtags.
+- Output ONLY the clean spoken words to be read aloud by text-to-speech.`
+              }
+            ]
+          }
+        ],
+        config: { temperature: 0.7 }
+      });
+
+      if (scriptResponse.text) {
+        narrationScript = scriptResponse.text.trim();
+      }
+    } catch (llmErr) {
+      console.warn("⚠️ [LLM Script Fallback]:", llmErr.message);
+    }
+
+    // 2. Queue job with separate visual prompt and spoken script
     const job = await videoQueue.add("render-video", {
+      visualPrompt: topic,
+      narrationText: narrationScript,
       topic,
       duration: Number(duration),
       aspectRatio,
@@ -582,6 +658,7 @@ app.post("/api/generate", validateApiKeyAndCredits("reel_30s"), async (req, res)
       isPaidTier: isPaid,
     });
   } catch (error) {
+    console.error("❌ Generation Route Error:", error);
     res.status(500).json({ error: "Failed to submit video task." });
   }
 });
