@@ -2,63 +2,84 @@ import { supabase } from "../lib/supabase.js";
 
 export function validateServiceKey(defaultServiceCode = "reel_30s") {
   return async (req, res, next) => {
-    // 1. Extract API key
-    const apiKey =
-      req.headers["x-api-key"] ||
-      req.query.api_key ||
-      req.body.api_key ||
-      "miu_live_master_9f8a3c2b1a";
-
-    // 2. Determine service code
-    let serviceCode = defaultServiceCode;
-    if (req.body.duration) {
-      const dur = Number(req.body.duration);
-      if (dur <= 15) serviceCode = "reel_15s";
-      else if (dur <= 30) serviceCode = "reel_30s";
-      else serviceCode = "reel_60s";
-    }
-
     try {
-      let requiredCredits = null;
-      let serviceName = "API Dispatch";
+      // 1. Determine service code & credit cost
+      let serviceCode = defaultServiceCode;
+      if (req.body && req.body.duration) {
+        const dur = Number(req.body.duration);
+        if (dur <= 15) serviceCode = "reel_15s";
+        else if (dur <= 30) serviceCode = "reel_30s";
+        else serviceCode = "reel_60s";
+      }
 
-      // 3. Credit cost resolution
-      if (typeof serviceCode === "number") {
-        requiredCredits = serviceCode;
-      } else {
-        const { data: service } = await supabase
-          .from("services")
-          .select("*")
-          .eq("service_code", serviceCode)
-          .single();
+      const FALLBACK_COSTS = {
+        sales_agent: 1,
+        proposal_gen: 1,
+        search_vault: 1,
+        voice_call: 10,
+        reel_15s: 15,
+        reel_30s: 25,     // 25 credits per 30s Reel
+        reel_60s: 40,
+        archicad_bim: 10,
+      };
 
-        if (service) {
-          requiredCredits = service.credit_cost;
-          serviceName = service.service_name;
-        } else {
-          // Hardcoded fallback map aligned with UI costs
-          const FALLBACK_COSTS = {
-            sales_agent: 1,
-            proposal_gen: 1,
-            search_vault: 1,
-            voice_call: 10,
-            reel_15s: 15,
-            reel_30s: 25,     // Aligned with (25 Credits) in UI
-            reel_60s: 40,
-            archicad_bim: 10,
-          };
+      const requiredCredits = FALLBACK_COSTS[serviceCode] || 25;
 
-          requiredCredits = FALLBACK_COSTS[serviceCode] !== undefined ? FALLBACK_COSTS[serviceCode] : Number(serviceCode);
+      // 2. Check for Logged-in Web App User (Bearer Token)
+      const authHeader = req.headers.authorization;
+      if (authHeader && authHeader.startsWith("Bearer ")) {
+        const token = authHeader.split(" ")[1];
+        const { data: { user }, error: userError } = await supabase.auth.getUser(token);
 
-          if (requiredCredits === null || requiredCredits === undefined || isNaN(requiredCredits)) {
-            return res
-              .status(400)
-              .json({ error: `Invalid service code: '${serviceCode}'` });
+        if (user && !userError) {
+          const { data: profile, error: profileError } = await supabase
+            .from("profiles")
+            .select("id, credit_balance, email")
+            .eq("id", user.id)
+            .single();
+
+          if (profileError || !profile) {
+            return res.status(404).json({ error: "User profile not found." });
           }
+
+          if (profile.credit_balance < requiredCredits) {
+            return res.status(402).json({
+              error: "Payment Required: Insufficient credits.",
+              currentBalance: profile.credit_balance,
+              requiredCredits,
+            });
+          }
+
+          // Deduct credits from user's profiles record
+          const newBalance = profile.credit_balance - requiredCredits;
+          await supabase
+            .from("profiles")
+            .update({ credit_balance: newBalance })
+            .eq("id", user.id);
+
+          // Log API consumption
+          await supabase.from("api_logs").insert({
+            user_id: user.id,
+            endpoint: String(serviceCode),
+            credits_deducted: requiredCredits,
+          });
+
+          console.log(
+            `🔑 [Gateway] User '${profile.email}' authorized for '${serviceCode}' (-${requiredCredits} credits) | Balance: ${newBalance}`
+          );
+
+          req.user = { ...profile, credit_balance: newBalance };
+          return next();
         }
       }
 
-      // 4. Validate Client Key
+      // 3. Fallback: Check B2B / API Key from 'clients' table
+      const apiKey =
+        req.headers["x-api-key"] ||
+        req.query.api_key ||
+        (req.body && req.body.api_key) ||
+        "miu_live_master_9f8a3c2b1a";
+
       const { data: client, error: clientError } = await supabase
         .from("clients")
         .select("*")
@@ -66,10 +87,9 @@ export function validateServiceKey(defaultServiceCode = "reel_30s") {
         .single();
 
       if (clientError || !client) {
-        return res.status(403).json({ error: "Forbidden: Invalid API key." });
+        return res.status(403).json({ error: "Forbidden: Invalid API key or session." });
       }
 
-      // 5. Check Credit Balance
       if (client.credit_balance < requiredCredits) {
         return res.status(402).json({
           error: "Payment Required: Insufficient API credits.",
@@ -78,22 +98,14 @@ export function validateServiceKey(defaultServiceCode = "reel_30s") {
         });
       }
 
-      // 6. Deduct Credits from 'clients' table
-      const newBalance = client.credit_balance - requiredCredits;
+      // Deduct from clients table
+      const newClientBalance = client.credit_balance - requiredCredits;
       await supabase
         .from("clients")
-        .update({ credit_balance: newBalance })
+        .update({ credit_balance: newClientBalance })
         .eq("id", client.id);
 
-      // 7. Sync deduction to 'profiles' table if user_id exists
-      if (client.user_id) {
-        await supabase
-          .from("profiles")
-          .update({ credit_balance: newBalance })
-          .eq("id", client.user_id);
-      }
-
-      // 8. Log Usage
+      // Log usage
       await supabase.from("api_logs").insert({
         client_id: client.id,
         endpoint: String(serviceCode),
@@ -101,10 +113,10 @@ export function validateServiceKey(defaultServiceCode = "reel_30s") {
       });
 
       console.log(
-        `🔑 [Gateway] Authorized '${client.client_name}' for '${serviceName}' (-${requiredCredits} credits) | Balance: ${newBalance}`
+        `🔑 [Gateway] Client '${client.client_name}' authorized for '${serviceCode}' (-${requiredCredits} credits) | Balance: ${newClientBalance}`
       );
 
-      req.client = { ...client, credit_balance: newBalance };
+      req.client = { ...client, credit_balance: newClientBalance };
       next();
     } catch (err) {
       console.error("❌ Gateway Auth Error:", err);

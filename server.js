@@ -38,14 +38,16 @@ const allowedOrigins = [
 app.use(
   cors({
     origin: (origin, callback) => {
-      if (!origin || allowedOrigins.includes(origin)) {
+      // Allow requests with no origin (like mobile apps, curl, or server-to-server) or listed origins
+      if (!origin || allowedOrigins.includes(origin) || origin.endsWith(".trycloudflare.com")) {
         callback(null, true);
       } else {
         callback(new Error("CORS policy violation"));
       }
     },
-    methods: ["GET", "POST"],
-    allowedHeaders: ["Content-Type", "x-api-key"],
+    methods: ["GET", "POST", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "x-api-key", "Authorization"],
+    credentials: true,
   })
 );
 
