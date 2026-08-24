@@ -745,19 +745,22 @@ app.post("/api/social/broadcast", validateApiKeyAndCredits("social_broadcast"), 
       "miu-studio"
     ).trim();
 
+    // Stable public MP4 CDN fallback
     let targetUrl = (videoUrl || "").trim();
     if (!targetUrl || !targetUrl.startsWith("http") || targetUrl.includes("localhost")) {
-      targetUrl = "https://raw.githubusercontent.com/intel-iot-devkit/sample-videos/master/person-bicycle-car-detection.mp4";
+      targetUrl = "https://www.w3schools.com/html/mov_bbb.mp4";
     }
 
     console.log(`📡 [Social Broadcast]: Fetching video stream from ${targetUrl}...`);
-    const videoRes = await axios.get(targetUrl, { responseType: "arraybuffer" });
+    const videoRes = await axios.get(targetUrl, { 
+      responseType: "arraybuffer",
+      timeout: 20000,
+    });
     const videoBlob = new Blob([videoRes.data], { type: "video/mp4" });
 
     console.log(`📡 [Social Broadcast]: Dispatching to Upload-Post under user '${username}' on [${dispatchPlatforms.join(", ")}]...`);
 
     const formData = new FormData();
-    // Send both 'user' and 'username' keys in form-data
     formData.append("user", username);
     formData.append("username", username);
     formData.append("video", videoBlob, "reel_broadcast.mp4");
