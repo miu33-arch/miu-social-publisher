@@ -38,7 +38,6 @@ const allowedOrigins = [
 app.use(
   cors({
     origin: (origin, callback) => {
-      // Allow requests with no origin (like mobile apps, curl, or server-to-server) or listed origins
       if (!origin || allowedOrigins.includes(origin) || origin.endsWith(".trycloudflare.com")) {
         callback(null, true);
       } else {
@@ -53,7 +52,7 @@ app.use(
 
 app.use(express.json());
 
-// 🛡️ Express Rate Limiter
+// Express Rate Limiter
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 100,
@@ -76,7 +75,7 @@ app.get("/health", (req, res) => {
   res.json({ status: "online", gateway: "active", timestamp: new Date() });
 });
 
-// 🔍 Tavily Live AI Web Search Endpoint
+// Tavily Live AI Web Search Endpoint
 app.post("/api/vault/search", validateApiKeyAndCredits("search_vault"), async (req, res) => {
   const { query } = req.body;
 
@@ -119,7 +118,7 @@ app.post("/api/vault/search", validateApiKeyAndCredits("search_vault"), async (r
   }
 });
 
-// 💳 PayMongo Checkout Session Route (3-Tier Support)
+// PayMongo Checkout Session Route
 app.post("/api/billing/paymongo-checkout", async (req, res) => {
   const { userId, creditPackage } = req.body;
 
@@ -181,7 +180,7 @@ app.post("/api/billing/paymongo-checkout", async (req, res) => {
   }
 });
 
-// 📩 PayMongo Webhook Listener (Dual clients + profiles sync)
+// PayMongo Webhook Listener
 app.post("/api/billing/paymongo-webhook", async (req, res) => {
   try {
     const event = req.body.data;
@@ -191,7 +190,6 @@ app.post("/api/billing/paymongo-webhook", async (req, res) => {
       const { user_id, credits_to_add } = session.attributes.metadata;
       const addCredits = Number(credits_to_add || 500);
 
-      // 1. Locate client record
       const { data: client } = await supabase
         .from("clients")
         .select("id, credit_balance")
@@ -201,13 +199,11 @@ app.post("/api/billing/paymongo-webhook", async (req, res) => {
       if (client) {
         const newBalance = (client.credit_balance || 0) + addCredits;
 
-        // Update clients table
         await supabase
           .from("clients")
           .update({ credit_balance: newBalance, is_paid: true })
           .eq("id", client.id);
 
-        // 2. Sync directly to profiles table for live UI state
         await supabase
           .from("profiles")
           .update({ credit_balance: newBalance, tier: "PRO" })
@@ -224,7 +220,7 @@ app.post("/api/billing/paymongo-webhook", async (req, res) => {
   }
 });
 
-// 🌍 Global Polar Checkout Endpoint (3-Tier Support)
+// Global Polar Checkout Endpoint
 app.post("/api/billing/polar-checkout", async (req, res) => {
   const { userId, email, creditPackage } = req.body;
 
@@ -270,7 +266,7 @@ app.post("/api/billing/polar-checkout", async (req, res) => {
   }
 });
 
-// 📩 Polar Webhook Listener
+// Polar Webhook Listener
 app.post("/api/billing/polar-webhook", async (req, res) => {
   try {
     const event = req.body;
@@ -339,7 +335,7 @@ app.post("/api/billing/polar-webhook", async (req, res) => {
   }
 });
 
-// 🤖 AI Sales Lead Qualifier & Deal Negotiator Endpoint
+// AI Sales Lead Qualifier & Deal Negotiator Endpoint
 app.post("/api/sales-agent/chat", validateApiKeyAndCredits("sales_agent"), async (req, res) => {
   const { message, conversationHistory = [] } = req.body;
 
@@ -417,25 +413,34 @@ app.post("/api/sales-agent/chat", validateApiKeyAndCredits("sales_agent"), async
   }
 });
 
-// 📞 Outbound AI Voice Agent Dispatch Endpoint
+// 📞 Outbound AI Voice Agent Dispatch Endpoint (Live Global Telephony)
 app.post("/api/voice/dispatch", validateApiKeyAndCredits("voice_call"), async (req, res) => {
-  let { phoneNumber, campaignType = "Lead Qualifying" } = req.body;
+  let { phoneNumber, campaignType = "Lead Qualifying", taskPrompt } = req.body;
 
   if (!phoneNumber) {
     return res.status(400).json({ error: "Phone number is required." });
   }
 
+  // Sanitize and format to strict international standard (E.164)
   let cleanNumber = phoneNumber.replace(/[^0-9+]/g, "");
   if (!cleanNumber.startsWith("+")) cleanNumber = "+" + cleanNumber;
 
+  const defaultTask = `You are an elite, professional sales representative calling from MIU Studio. Your goal is: ${campaignType}. Speak concisely, sound natural and confident, and qualify the client's commercial interest.`;
+
   try {
+    console.log(`\n📞 [Bland AI]: Dispatching live call to ${cleanNumber}...`);
+
     const response = await axios.post(
       "https://api.bland.ai/v1/calls",
       {
         phone_number: cleanNumber,
-        task: `You are an AI sales agent for MIU Studio calling a potential client. Your goal is ${campaignType}. Be friendly, concise, and professional.`,
+        task: taskPrompt || defaultTask,
         voice: "nat",
-        first_sentence: "Hello! This is the AI Voice Assistant calling from MIU Studio.",
+        first_sentence: "Hello, this is the AI commercial agent calling from MIU Studio.",
+        model: "enhanced",
+        reduce_latency: true,
+        record: true,
+        wait_for_greeting: true,
       },
       {
         headers: {
@@ -445,26 +450,35 @@ app.post("/api/voice/dispatch", validateApiKeyAndCredits("voice_call"), async (r
       }
     );
 
-    res.json({
+    // Validate response from Bland API
+    if (response.data.status === "error" || !response.data.call_id) {
+      console.error("❌ Bland AI Rejection:", response.data);
+      return res.status(502).json({
+        error: response.data.message || "Bland AI carrier rejected the outbound dispatch.",
+      });
+    }
+
+    console.log(`✅ [Bland AI]: Call dispatched successfully | Call ID: ${response.data.call_id}`);
+
+    return res.json({
       success: true,
       message: `Voice agent dispatched to ${cleanNumber}`,
       callId: response.data.call_id,
       remainingCredits: req.client.credit_balance,
+      isPaidTier: req.client.is_paid || (req.client.credit_balance > 100),
     });
   } catch (err) {
-    console.log(`⚠️ [Bland AI Dispatch for ${cleanNumber}]: Simulated fallback.`);
+    const errorPayload = err.response?.data || err.message;
+    console.error("❌ Bland AI Dispatch Error:", errorPayload);
 
-    res.json({
-      success: true,
-      simulated: true,
-      message: `Voice agent dispatched to ${cleanNumber} (Simulated)`,
-      callId: `sim_call_${Date.now()}`,
-      remainingCredits: req.client.credit_balance,
+    return res.status(err.response?.status || 500).json({
+      error: err.response?.data?.message || err.message || "Failed to dispatch live call.",
+      details: errorPayload,
     });
   }
 });
 
-// 📄 Client Vault & Proposal Generation Endpoint
+// Client Vault & Proposal Generation Endpoint
 app.post("/api/proposals/generate", validateApiKeyAndCredits("proposal_gen"), async (req, res) => {
   const { clientName, projectTitle, budget = 150000, deliverables } = req.body;
 
@@ -546,7 +560,7 @@ app.post("/api/proposals/generate", validateApiKeyAndCredits("proposal_gen"), as
   }
 });
 
-// 🏗️ Archicad + Tapir BIM Automation Pipeline
+// Archicad + Tapir BIM Automation Pipeline
 app.post("/api/archicad/execute", validateApiKeyAndCredits("archicad_bim"), async (req, res) => {
   const { action = "get_elements", parameters = {} } = req.body;
   const { elementType = "Wall", moodPreset = "cyber_dusk", customPrompt = "" } = parameters;
@@ -624,7 +638,7 @@ app.post("/api/archicad/execute", validateApiKeyAndCredits("archicad_bim"), asyn
   });
 });
 
-// 🎬 Video Generation Route
+// Video Generation Route
 app.post("/api/generate", validateApiKeyAndCredits("reel_30s"), async (req, res) => {
   const { topic, duration = 30, aspectRatio = "9:16", stylePreset = "cyberpunk" } = req.body;
 
@@ -644,11 +658,12 @@ app.post("/api/generate", validateApiKeyAndCredits("reel_30s"), async (req, res)
             role: "user",
             parts: [
               {
-                text: `Write a punchy, engaging, ${duration}-second spoken voiceover narration script about this concept: "${topic}".
+                text: `Write an immersive, cinematic ${duration}-second voiceover narration script about: "${topic}".
 STRICT RULES:
-- Do NOT include camera movements, shot types (e.g. whip-pan, 9:16), aspect ratios, visual descriptions, or scene tags.
-- Do NOT use emojis, speaker labels, or hashtags.
-- Output ONLY the clean spoken words to be read aloud by text-to-speech.`
+- Match the vocabulary and emotional energy directly to this theme.
+- Do NOT use camera directions, shot terms (e.g., 9:16, zoom, pan), or scene numbers.
+- Do NOT include generic architectural clichés or fixed catchphrases.
+- Output ONLY the spoken narration words.`
               }
             ]
           }
@@ -695,6 +710,56 @@ app.get("/api/job/:id", async (req, res) => {
 
   const state = await job.getState();
   res.json({ jobId: String(job.id), state, result: job.returnvalue || null });
+});
+
+// 📡 Social Broadcast Dispatch via Upload-Post (Multi-Channel)
+app.post("/api/social/broadcast", validateApiKeyAndCredits("social_broadcast"), async (req, res) => {
+  const { videoUrl, title, platforms } = req.body;
+
+  if (!videoUrl) {
+    return res.status(400).json({ error: "Missing required 'videoUrl'." });
+  }
+
+  // Expanded platform target list
+  const targetPlatforms = Array.isArray(platforms) && platforms.length > 0 
+    ? platforms 
+    : ["youtube", "tiktok", "instagram", "linkedin", "x", "google_business_profile"];
+
+  try {
+    console.log(`📡 [Social Broadcast]: Dispatching reel across ${targetPlatforms.length} networks...`);
+
+    const response = await axios.post(
+      "https://api.upload-post.com/api/v1/posts",
+      {
+        video: videoUrl,
+        title: title || "MIU Studio Reel Generation",
+        user: process.env.UPLOAD_POST_USER || "miu-studio",
+        platforms: targetPlatforms,
+      },
+      {
+        headers: {
+          "Authorization": `Apikey ${process.env.UPLOAD_POST_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+
+    console.log(`✅ [Social Broadcast]: Post queued successfully.`, response.data);
+
+    res.json({
+      success: true,
+      data: response.data,
+      platforms: targetPlatforms,
+      message: `Broadcast initiated across ${targetPlatforms.length} channels (YouTube, TikTok, IG, LinkedIn, X, Google Business).`,
+      remainingCredits: req.client.credit_balance,
+      isPaidTier: req.client.is_paid || (req.client.credit_balance > 100),
+    });
+  } catch (err) {
+    console.error("❌ Upload-Post Error:", err.response?.data || err.message);
+    res.status(500).json({ 
+      error: "Broadcast failed: " + (err.response?.data?.message || err.message) 
+    });
+  }
 });
 
 const PORT = process.env.PORT || 5000;

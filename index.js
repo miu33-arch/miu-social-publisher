@@ -83,14 +83,44 @@ export async function runAutonomousEngine(userPromptTopic, options = {}) {
   console.log(`\n🚀 [Autonomous Engine] Generating Reel for: "${userPromptTopic}"`);
   console.log(`⏱️ Duration: ${targetDuration}s (${sceneCount} scenes) | Style: ${stylePreset} | Ratio: ${aspectRatio}\n`);
 
-  // Dynamically constructed narrative narration
-  const generatedScript = `Exploring ${userPromptTopic}. Every detail reflects cutting-edge design, spatial balance, and visual atmosphere. Experience the architecture of tomorrow, crafted with precision.`;
+  // Dynamically constructed narrative narration via Gemini
+  let generatedScript = options.narrationText;
+
+  if (!generatedScript) {
+    try {
+      const aiResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{
+            parts: [{
+              text: `Write an immersive 2-3 sentence cinematic narration voiceover script about: "${userPromptTopic}".
+Tone / Style: "${styleModifier}".
+Target spoken length: ${Math.round(targetDuration * 2.3)} words.
+Rules:
+- NEVER use generic slogans or repetitive architectural catchphrases.
+- Adapt tone, vocabulary, and intensity directly to the chosen style.
+- Output ONLY the clean spoken narration words.`
+            }]
+          }]
+        })
+      });
+      const aiData = await aiResponse.json();
+      generatedScript = aiData?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+    } catch (err) {
+      console.warn("⚠️ [Narration Generation Fallback]:", err.message);
+    }
+  }
+
+  if (!generatedScript) {
+    generatedScript = `Observing ${userPromptTopic}. Defined by high-fidelity structural execution, immersive atmosphere, and precise design intelligence.`;
+  }
   
   const scenes = [];
   for (let i = 0; i < sceneCount; i++) {
     scenes.push({
-      keyframePrompt: `Scene ${i + 1}: ${userPromptTopic}, ${styleModifier}, dynamic perspective, masterfully composed`,
-      motionPrompt: "Slow dramatic cinematic camera pan, atmospheric lighting shift, high quality"
+      keyframePrompt: `Scene ${i + 1} of ${sceneCount}: ${userPromptTopic}, ${styleModifier}, dynamic perspective, masterfully composed, cinematic framing, 8k render`,
+      motionPrompt: "Subtle dramatic cinematic camera motion, atmospheric lighting shift, steady tracking, high quality"
     });
   }
 
