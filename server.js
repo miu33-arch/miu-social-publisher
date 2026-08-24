@@ -730,13 +730,16 @@ app.post("/api/social/broadcast", validateApiKeyAndCredits("social_broadcast"), 
     const rawApiKey = (process.env.UPLOAD_POST_API_KEY || "").trim();
     const apiKey = rawApiKey.replace(/^Bearer\s+|^Apikey\s+/i, "");
 
-    // Upload-Post direct upload endpoint
+   // Upload-Post direct upload endpoint
+    const targetUser = process.env.UPLOAD_POST_USERNAME || process.env.UPLOAD_POST_USER || "padillaanamy83";
+
     const response = await axios.post(
       "https://api.upload-post.com/api/upload",
       {
         video_url: videoUrl,
         title: title || "MIU Studio Reel Generation",
-        user: process.env.UPLOAD_POST_USER || "miu-studio",
+        username: targetUser,
+        user: targetUser, // Included for backward compatibility
         platforms: targetPlatforms,
       },
       {
@@ -746,7 +749,7 @@ app.post("/api/social/broadcast", validateApiKeyAndCredits("social_broadcast"), 
         },
       }
     );
-
+    
     console.log(`✅ [Social Broadcast]: Post queued successfully.`, response.data);
 
     res.json({
