@@ -742,7 +742,11 @@ app.post("/api/social/broadcast", validateApiKeyAndCredits("social_broadcast"), 
 
     const formData = new FormData();
     formData.append("user", username);
+    
+    // Upload-Post field keys for remote video URLs
+    formData.append("video", videoUrl);
     formData.append("video_url", videoUrl);
+    formData.append("url", videoUrl);
     formData.append("title", title || "MIU Studio Architectural Generation");
 
     finalPlatforms.forEach((p) => {
