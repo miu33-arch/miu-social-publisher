@@ -711,23 +711,17 @@ app.get("/api/job/:id", async (req, res) => {
   const state = await job.getState();
   res.json({ jobId: String(job.id), state, result: job.returnvalue || null });
 });
-
 // 📡 Social Broadcast Dispatch via Upload-Post (Multi-Channel)
 app.post("/api/social/broadcast", validateApiKeyAndCredits("social_broadcast"), async (req, res) => {
   const { videoUrl, title, platforms } = req.body;
 
-  // Strict whitelist for your 5 connected accounts
   const connectedPlatforms = ["youtube", "instagram", "linkedin", "x", "google_business"];
   const allowedSet = new Set(connectedPlatforms);
 
   const incoming = (Array.isArray(platforms) && platforms.length > 0 ? platforms : connectedPlatforms).map((p) => {
     const clean = String(p).toLowerCase().trim();
-    if (clean === "google_business_profile" || clean === "gmb") {
-      return "google_business";
-    }
-    if (clean === "twitter") {
-      return "x";
-    }
+    if (clean === "google_business_profile" || clean === "gmb") return "google_business";
+    if (clean === "twitter") return "x";
     return clean;
   });
 
@@ -737,33 +731,30 @@ app.post("/api/social/broadcast", validateApiKeyAndCredits("social_broadcast"), 
   try {
     const rawApiKey = (process.env.UPLOAD_POST_API_KEY || "").trim();
     const apiKey = rawApiKey.replace(/^Bearer\s+|^Apikey\s+/i, "");
-    
-    // Priority check for the exact username
-    const username = (
-      process.env.UPLOAD_POST_USER ||
-      process.env.UPLOAD_POST_USERNAME ||
-      "miu-studio"
-    ).trim();
+    const username = (process.env.UPLOAD_POST_USERNAME || process.env.UPLOAD_POST_USER || "miu-studio").trim();
 
-    // Stable public MP4 CDN fallback
     let targetUrl = (videoUrl || "").trim();
     if (!targetUrl || !targetUrl.startsWith("http") || targetUrl.includes("localhost")) {
       targetUrl = "https://www.w3schools.com/html/mov_bbb.mp4";
     }
 
-    console.log(`📡 [Social Broadcast]: Fetching video stream from ${targetUrl}...`);
+    console.log(`\n==============================================`);
+    console.log(`📡 [Social Broadcast] User: ${username}`);
+    console.log(`📡 [Social Broadcast] Targets: [${dispatchPlatforms.join(", ")}]`);
+    console.log(`📡 [Social Broadcast] Video: ${targetUrl}`);
+    console.log(`==============================================\n`);
+
+    // Download small buffer
     const videoRes = await axios.get(targetUrl, { 
       responseType: "arraybuffer",
-      timeout: 20000,
+      timeout: 15000 
     });
     const videoBlob = new Blob([videoRes.data], { type: "video/mp4" });
-
-    console.log(`📡 [Social Broadcast]: Dispatching to Upload-Post under user '${username}' on [${dispatchPlatforms.join(", ")}]...`);
 
     const formData = new FormData();
     formData.append("user", username);
     formData.append("username", username);
-    formData.append("video", videoBlob, "reel_broadcast.mp4");
+    formData.append("video", videoBlob, "broadcast.mp4");
     formData.append("title", title || "MIU Studio Architectural Generation");
 
     dispatchPlatforms.forEach((p) => {
@@ -780,9 +771,9 @@ app.post("/api/social/broadcast", validateApiKeyAndCredits("social_broadcast"), 
       }
     );
 
-    console.log(`✅ [Social Broadcast]: Post queued successfully:`, response.data);
+    console.log(`✅ [Social Broadcast] Succeeded:`, response.data);
 
-    res.json({
+    return res.json({
       success: true,
       data: response.data,
       platforms: dispatchPlatforms,
@@ -791,10 +782,14 @@ app.post("/api/social/broadcast", validateApiKeyAndCredits("social_broadcast"), 
       isPaidTier: req.client.is_paid || (req.client.credit_balance > 100),
     });
   } catch (err) {
-    console.error("❌ Upload-Post Error:", err.response?.data || err.message);
-    const detail = err.response?.data?.message || err.response?.data?.error || err.message;
-    res.status(500).json({ 
-      error: `Broadcast failed: ${detail}` 
+    const status = err.response?.status || 500;
+    const errData = err.response?.data;
+    const detail = typeof errData === "object" ? JSON.stringify(errData) : (errData || err.message);
+    
+    console.error(`❌ [Upload-Post Failed (${status})]:`, detail);
+
+    return res.status(status).json({ 
+      error: `Broadcast failed (${status}): ${detail}` 
     });
   }
 });
