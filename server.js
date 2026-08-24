@@ -716,11 +716,13 @@ app.get("/api/job/:id", async (req, res) => {
 app.post("/api/social/broadcast", validateApiKeyAndCredits("social_broadcast"), async (req, res) => {
   const { videoUrl, title, platforms } = req.body;
 
+  // Strict whitelist of your connected accounts only
   const connectedPlatforms = ["youtube", "instagram", "linkedin", "x", "google_business"];
   const allowedSet = new Set(connectedPlatforms);
 
+  // Normalize incoming platform array
   const incoming = (Array.isArray(platforms) && platforms.length > 0 ? platforms : connectedPlatforms).map((p) => {
-    const clean = p.toLowerCase().trim();
+    const clean = String(p).toLowerCase().trim();
     if (clean === "google_business_profile" || clean === "gmb") {
       return "google_business";
     }
@@ -740,47 +742,24 @@ app.post("/api/social/broadcast", validateApiKeyAndCredits("social_broadcast"), 
       targetUrl = "https://raw.githubusercontent.com/intel-iot-devkit/sample-videos/master/person-bicycle-car-detection.mp4";
     }
 
-    console.log(`📡 [Social Broadcast]: Dispatching to Upload-Post for user '${username}' across [${dispatchPlatforms.join(", ")}]...`);
-
-    // Download MP4 arraybuffer to attach as real binary file
-    const videoRes = await axios.get(targetUrl, { responseType: "arraybuffer" });
-    const videoBlob = new Blob([videoRes.data], { type: "video/mp4" });
-
-    const formData = new FormData();
-    formData.append("user", username);
-    formData.append("file", videoBlob, "reel_broadcast.mp4");
-    formData.append("video", videoBlob, "reel_broadcast.mp4");
-    formData.append("title", title || "MIU Studio Architectural Generation");
-
-    dispatchPlatforms.forEach((p) => {
-      formData.append("platform[]", p);
-      formData.append("platforms[]", p);
-    });
-
-    // Upload-Post unified upload route
-    const uploadUrl = "https://api.upload-post.com/api/upload_media";
+    console.log(`📡 [Social Broadcast]: Dispatching to Upload-Post for '${username}' on [${dispatchPlatforms.join(", ")}]...`);
 
     const response = await axios.post(
-      uploadUrl,
-      formData,
+      "https://api.upload-post.com/api/upload",
+      {
+        user: username,
+        username: username,
+        video_url: targetUrl,
+        title: title || "MIU Studio Architectural Generation",
+        platforms: dispatchPlatforms,
+      },
       {
         headers: {
           "Authorization": `Apikey ${apiKey}`,
+          "Content-Type": "application/json",
         },
       }
-    ).catch(async (err) => {
-      // Fallback to /api/upload if upload_media returns 404
-      if (err.response?.status === 404) {
-        return await axios.post(
-          "https://api.upload-post.com/api/v1/upload",
-          formData,
-          {
-            headers: { "Authorization": `Apikey ${apiKey}` },
-          }
-        );
-      }
-      throw err;
-    });
+    );
 
     console.log(`✅ [Social Broadcast]: Post queued successfully:`, response.data);
 
