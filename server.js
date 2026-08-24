@@ -716,39 +716,45 @@ app.get("/api/job/:id", async (req, res) => {
 app.post("/api/social/broadcast", validateApiKeyAndCredits("social_broadcast"), async (req, res) => {
   const { videoUrl, title, platforms } = req.body;
 
-  // Use a reliable public CDN sample MP4 if missing/local
-  let targetUrl = (videoUrl || "").trim();
-  if (!targetUrl || !targetUrl.startsWith("http") || targetUrl.includes("localhost")) {
-    targetUrl = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4";
-  }
+  // Strict whitelist of your connected accounts only
+  const connectedPlatforms = ["youtube", "instagram", "linkedin", "x", "google_business"];
+  const allowedSet = new Set(connectedPlatforms);
 
-  // Allowed platform slugs for Upload-Post
-  const validPlatformSet = new Set([
-    "youtube", "tiktok", "instagram", "linkedin", "x", 
-    "facebook", "threads", "pinterest", "bluesky", "reddit"
-  ]);
+  // Normalize incoming platform array or fallback to your connected accounts
+  const incoming = (Array.isArray(platforms) && platforms.length > 0 ? platforms : connectedPlatforms).map((p) => {
+    const clean = p.toLowerCase().trim();
+    if (clean === "google_business_profile" || clean === "gmb") {
+      return "google_business";
+    }
+    return clean;
+  });
 
-  const incomingPlatforms = Array.isArray(platforms) && platforms.length > 0
-    ? platforms
-    : ["youtube", "tiktok", "instagram", "linkedin", "x"];
-
-  const filteredPlatforms = incomingPlatforms.filter((p) => validPlatformSet.has(p.toLowerCase()));
-  const finalPlatforms = filteredPlatforms.length > 0 ? filteredPlatforms : ["youtube", "tiktok", "instagram"];
+  const finalPlatforms = incoming.filter((p) => allowedSet.has(p));
+  const dispatchPlatforms = finalPlatforms.length > 0 ? finalPlatforms : connectedPlatforms;
 
   try {
     const rawApiKey = (process.env.UPLOAD_POST_API_KEY || "").trim();
     const apiKey = rawApiKey.replace(/^Bearer\s+|^Apikey\s+/i, "");
     const username = (process.env.UPLOAD_POST_USERNAME || process.env.UPLOAD_POST_USER || "miu-studio").trim();
 
-    console.log(`📡 [Social Broadcast]: Dispatching URL to Upload-Post for user '${username}' across [${finalPlatforms.join(", ")}]...`);
+    let targetUrl = (videoUrl || "").trim();
+    if (!targetUrl || !targetUrl.startsWith("http") || targetUrl.includes("localhost")) {
+      targetUrl = "https://raw.githubusercontent.com/intel-iot-devkit/sample-videos/master/person-bicycle-car-detection.mp4";
+    }
+
+    console.log(`📡 [Social Broadcast]: Streaming MP4 from ${targetUrl}...`);
+    const videoStreamResponse = await axios.get(targetUrl, { responseType: "arraybuffer" });
+    const videoBlob = new Blob([videoStreamResponse.data], { type: "video/mp4" });
+
+    console.log(`📡 [Social Broadcast]: Dispatching to [${dispatchPlatforms.join(", ")}] for user '${username}'...`);
 
     const formData = new FormData();
     formData.append("user", username);
-    formData.append("video", targetUrl);
+    formData.append("video", videoBlob, "reel_broadcast.mp4");
     formData.append("title", title || "MIU Studio Architectural Generation");
 
-    finalPlatforms.forEach((p) => {
-      formData.append("platform[]", p.toLowerCase());
+    dispatchPlatforms.forEach((p) => {
+      formData.append("platform[]", p);
     });
 
     const response = await axios.post(
@@ -761,13 +767,13 @@ app.post("/api/social/broadcast", validateApiKeyAndCredits("social_broadcast"), 
       }
     );
 
-    console.log(`✅ [Social Broadcast]: Queued successfully:`, response.data);
+    console.log(`✅ [Social Broadcast]: Post queued successfully:`, response.data);
 
     res.json({
       success: true,
       data: response.data,
-      platforms: finalPlatforms,
-      message: `Broadcast initiated across ${finalPlatforms.length} channels.`,
+      platforms: dispatchPlatforms,
+      message: `Broadcast initiated across ${dispatchPlatforms.length} channels (${dispatchPlatforms.join(", ")}).`,
       remainingCredits: req.client.credit_balance,
       isPaidTier: req.client.is_paid || (req.client.credit_balance > 100),
     });
