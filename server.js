@@ -720,24 +720,32 @@ app.post("/api/social/broadcast", validateApiKeyAndCredits("social_broadcast"), 
     return res.status(400).json({ error: "Missing required 'videoUrl'." });
   }
 
-  const targetPlatforms = Array.isArray(platforms) && platforms.length > 0
+  // Supported Upload-Post platform keys
+  const validPlatformSet = new Set(["youtube", "tiktok", "instagram", "linkedin", "x", "facebook", "threads", "pinterest"]);
+
+  const incomingPlatforms = Array.isArray(platforms) && platforms.length > 0
     ? platforms
     : ["youtube", "tiktok", "instagram", "linkedin", "x"];
+
+  // Filter out any invalid slugs like 'google_business_profile'
+  const targetPlatforms = incomingPlatforms.filter((p) => validPlatformSet.has(p.toLowerCase()));
+
+  // Fallback to core networks if empty after filtering
+  const finalPlatforms = targetPlatforms.length > 0 ? targetPlatforms : ["youtube", "tiktok", "instagram", "linkedin", "x"];
 
   try {
     const rawApiKey = (process.env.UPLOAD_POST_API_KEY || "").trim();
     const apiKey = rawApiKey.replace(/^Bearer\s+|^Apikey\s+/i, "");
     const username = (process.env.UPLOAD_POST_USERNAME || process.env.UPLOAD_POST_USER || "miu-studio").trim();
 
-    console.log(`📡 [Social Broadcast]: Dispatching for user '${username}' across ${targetPlatforms.length} networks...`);
+    console.log(`📡 [Social Broadcast]: Dispatching for '${username}' across [${finalPlatforms.join(", ")}]...`);
 
-    // Upload-Post requires multipart/form-data
     const formData = new FormData();
     formData.append("user", username);
     formData.append("video_url", videoUrl);
     formData.append("title", title || "MIU Studio Architectural Generation");
 
-    targetPlatforms.forEach((p) => {
+    finalPlatforms.forEach((p) => {
       formData.append("platform[]", p);
     });
 
@@ -751,13 +759,13 @@ app.post("/api/social/broadcast", validateApiKeyAndCredits("social_broadcast"), 
       }
     );
 
-    console.log(`✅ [Social Broadcast]: Queued successfully:`, response.data);
+    console.log(`✅ [Social Broadcast]: Post queued successfully:`, response.data);
 
     res.json({
       success: true,
       data: response.data,
-      platforms: targetPlatforms,
-      message: `Broadcast initiated across ${targetPlatforms.length} channels.`,
+      platforms: finalPlatforms,
+      message: `Broadcast initiated across ${finalPlatforms.length} channels.`,
       remainingCredits: req.client.credit_balance,
       isPaidTier: req.client.is_paid || (req.client.credit_balance > 100),
     });
