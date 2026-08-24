@@ -720,16 +720,25 @@ app.post("/api/social/broadcast", validateApiKeyAndCredits("social_broadcast"), 
     return res.status(400).json({ error: "Missing required 'videoUrl'." });
   }
 
-  // Expanded platform target list
-  const targetPlatforms = Array.isArray(platforms) && platforms.length > 0 
-    ? platforms 
+  const targetPlatforms = Array.isArray(platforms) && platforms.length > 0
+    ? platforms
     : ["youtube", "tiktok", "instagram", "linkedin", "x", "google_business_profile"];
 
   try {
     console.log(`📡 [Social Broadcast]: Dispatching reel across ${targetPlatforms.length} networks...`);
 
+    const rawApiKey = (process.env.UPLOAD_POST_API_KEY || "").trim();
+    const authHeader = rawApiKey.startsWith("Bearer ")
+      ? rawApiKey
+      : rawApiKey.startsWith("Apikey ")
+      ? rawApiKey
+      : rawApiKey.startsWith("eyJ")
+      ? `Bearer ${rawApiKey}`
+      : `Apikey ${rawApiKey}`;
+
+    // Upload-Post unified post endpoint
     const response = await axios.post(
-      "https://api.upload-post.com/api/v1/posts",
+      "https://api.upload-post.com/api/posts",
       {
         video: videoUrl,
         title: title || "MIU Studio Reel Generation",
@@ -738,7 +747,7 @@ app.post("/api/social/broadcast", validateApiKeyAndCredits("social_broadcast"), 
       },
       {
         headers: {
-          "Authorization": `Apikey ${process.env.UPLOAD_POST_API_KEY}`,
+          "Authorization": authHeader,
           "Content-Type": "application/json",
         },
       }
@@ -750,14 +759,15 @@ app.post("/api/social/broadcast", validateApiKeyAndCredits("social_broadcast"), 
       success: true,
       data: response.data,
       platforms: targetPlatforms,
-      message: `Broadcast initiated across ${targetPlatforms.length} channels (YouTube, TikTok, IG, LinkedIn, X, Google Business).`,
+      message: `Broadcast initiated across ${targetPlatforms.length} channels.`,
       remainingCredits: req.client.credit_balance,
       isPaidTier: req.client.is_paid || (req.client.credit_balance > 100),
     });
   } catch (err) {
     console.error("❌ Upload-Post Error:", err.response?.data || err.message);
+    const detail = err.response?.data?.message || err.response?.data?.error || err.message;
     res.status(500).json({ 
-      error: "Broadcast failed: " + (err.response?.data?.message || err.message) 
+      error: `Broadcast failed: ${detail}` 
     });
   }
 });
