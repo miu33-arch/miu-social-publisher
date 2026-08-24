@@ -716,36 +716,39 @@ app.get("/api/job/:id", async (req, res) => {
 app.post("/api/social/broadcast", validateApiKeyAndCredits("social_broadcast"), async (req, res) => {
   const { videoUrl, title, platforms } = req.body;
 
-  // Verified public MP4 fallback if videoUrl is missing, local, or placeholder
-  let validUrl = videoUrl;
-  if (!validUrl || validUrl.includes("localhost") || !validUrl.startsWith("http")) {
-    validUrl = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4";
+  // Use a reliable public CDN sample MP4 if missing/local
+  let targetUrl = (videoUrl || "").trim();
+  if (!targetUrl || !targetUrl.startsWith("http") || targetUrl.includes("localhost")) {
+    targetUrl = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4";
   }
 
-  const validPlatformSet = new Set(["youtube", "tiktok", "instagram", "linkedin", "x", "facebook", "threads", "pinterest"]);
+  // Allowed platform slugs for Upload-Post
+  const validPlatformSet = new Set([
+    "youtube", "tiktok", "instagram", "linkedin", "x", 
+    "facebook", "threads", "pinterest", "bluesky", "reddit"
+  ]);
+
   const incomingPlatforms = Array.isArray(platforms) && platforms.length > 0
     ? platforms
     : ["youtube", "tiktok", "instagram", "linkedin", "x"];
 
-  const targetPlatforms = incomingPlatforms.filter((p) => validPlatformSet.has(p.toLowerCase()));
-  const finalPlatforms = targetPlatforms.length > 0 ? targetPlatforms : ["youtube", "tiktok", "instagram", "linkedin", "x"];
+  const filteredPlatforms = incomingPlatforms.filter((p) => validPlatformSet.has(p.toLowerCase()));
+  const finalPlatforms = filteredPlatforms.length > 0 ? filteredPlatforms : ["youtube", "tiktok", "instagram"];
 
   try {
     const rawApiKey = (process.env.UPLOAD_POST_API_KEY || "").trim();
     const apiKey = rawApiKey.replace(/^Bearer\s+|^Apikey\s+/i, "");
     const username = (process.env.UPLOAD_POST_USERNAME || process.env.UPLOAD_POST_USER || "miu-studio").trim();
 
-    console.log(`📡 [Social Broadcast]: Posting URL (${validUrl}) for user '${username}'...`);
+    console.log(`📡 [Social Broadcast]: Dispatching URL to Upload-Post for user '${username}' across [${finalPlatforms.join(", ")}]...`);
 
     const formData = new FormData();
     formData.append("user", username);
-    formData.append("video", validUrl);
-    formData.append("video_url", validUrl);
-    formData.append("url", validUrl);
-    formData.append("title", title || "MIU Studio Reel Generation");
+    formData.append("video", targetUrl);
+    formData.append("title", title || "MIU Studio Architectural Generation");
 
     finalPlatforms.forEach((p) => {
-      formData.append("platform[]", p);
+      formData.append("platform[]", p.toLowerCase());
     });
 
     const response = await axios.post(
