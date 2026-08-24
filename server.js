@@ -722,35 +722,36 @@ app.post("/api/social/broadcast", validateApiKeyAndCredits("social_broadcast"), 
 
   const targetPlatforms = Array.isArray(platforms) && platforms.length > 0
     ? platforms
-    : ["youtube", "tiktok", "instagram", "linkedin", "x", "google_business_profile"];
+    : ["youtube", "tiktok", "instagram", "linkedin", "x"];
 
   try {
-    console.log(`📡 [Social Broadcast]: Dispatching reel across ${targetPlatforms.length} networks...`);
-
     const rawApiKey = (process.env.UPLOAD_POST_API_KEY || "").trim();
     const apiKey = rawApiKey.replace(/^Bearer\s+|^Apikey\s+/i, "");
+    const username = (process.env.UPLOAD_POST_USERNAME || process.env.UPLOAD_POST_USER || "miu-studio").trim();
 
-   // Upload-Post direct upload endpoint
-    const targetUser = process.env.UPLOAD_POST_USERNAME || process.env.UPLOAD_POST_USER || "padillaanamy83";
+    console.log(`📡 [Social Broadcast]: Dispatching for user '${username}' across ${targetPlatforms.length} networks...`);
+
+    // Upload-Post requires multipart/form-data
+    const formData = new FormData();
+    formData.append("user", username);
+    formData.append("video_url", videoUrl);
+    formData.append("title", title || "MIU Studio Architectural Generation");
+
+    targetPlatforms.forEach((p) => {
+      formData.append("platform[]", p);
+    });
 
     const response = await axios.post(
       "https://api.upload-post.com/api/upload",
-      {
-        video_url: videoUrl,
-        title: title || "MIU Studio Reel Generation",
-        username: targetUser,
-        user: targetUser, // Included for backward compatibility
-        platforms: targetPlatforms,
-      },
+      formData,
       {
         headers: {
           "Authorization": `Apikey ${apiKey}`,
-          "Content-Type": "application/json",
         },
       }
     );
-    
-    console.log(`✅ [Social Broadcast]: Post queued successfully.`, response.data);
+
+    console.log(`✅ [Social Broadcast]: Queued successfully:`, response.data);
 
     res.json({
       success: true,
