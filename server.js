@@ -716,15 +716,17 @@ app.get("/api/job/:id", async (req, res) => {
 app.post("/api/social/broadcast", validateApiKeyAndCredits("social_broadcast"), async (req, res) => {
   const { videoUrl, title, platforms } = req.body;
 
-  // Strict whitelist of your connected accounts only
+  // Strict whitelist for your 5 connected accounts
   const connectedPlatforms = ["youtube", "instagram", "linkedin", "x", "google_business"];
   const allowedSet = new Set(connectedPlatforms);
 
-  // Normalize incoming platform array
   const incoming = (Array.isArray(platforms) && platforms.length > 0 ? platforms : connectedPlatforms).map((p) => {
     const clean = String(p).toLowerCase().trim();
     if (clean === "google_business_profile" || clean === "gmb") {
       return "google_business";
+    }
+    if (clean === "twitter") {
+      return "x";
     }
     return clean;
   });
@@ -735,28 +737,42 @@ app.post("/api/social/broadcast", validateApiKeyAndCredits("social_broadcast"), 
   try {
     const rawApiKey = (process.env.UPLOAD_POST_API_KEY || "").trim();
     const apiKey = rawApiKey.replace(/^Bearer\s+|^Apikey\s+/i, "");
-    const username = (process.env.UPLOAD_POST_USERNAME || process.env.UPLOAD_POST_USER || "miu-studio").trim();
+    
+    // Priority check for the exact username
+    const username = (
+      process.env.UPLOAD_POST_USER ||
+      process.env.UPLOAD_POST_USERNAME ||
+      "miu-studio"
+    ).trim();
 
     let targetUrl = (videoUrl || "").trim();
     if (!targetUrl || !targetUrl.startsWith("http") || targetUrl.includes("localhost")) {
       targetUrl = "https://raw.githubusercontent.com/intel-iot-devkit/sample-videos/master/person-bicycle-car-detection.mp4";
     }
 
-    console.log(`📡 [Social Broadcast]: Dispatching to Upload-Post for '${username}' on [${dispatchPlatforms.join(", ")}]...`);
+    console.log(`📡 [Social Broadcast]: Fetching video stream from ${targetUrl}...`);
+    const videoRes = await axios.get(targetUrl, { responseType: "arraybuffer" });
+    const videoBlob = new Blob([videoRes.data], { type: "video/mp4" });
+
+    console.log(`📡 [Social Broadcast]: Dispatching to Upload-Post under user '${username}' on [${dispatchPlatforms.join(", ")}]...`);
+
+    const formData = new FormData();
+    // Send both 'user' and 'username' keys in form-data
+    formData.append("user", username);
+    formData.append("username", username);
+    formData.append("video", videoBlob, "reel_broadcast.mp4");
+    formData.append("title", title || "MIU Studio Architectural Generation");
+
+    dispatchPlatforms.forEach((p) => {
+      formData.append("platform[]", p);
+    });
 
     const response = await axios.post(
       "https://api.upload-post.com/api/upload",
-      {
-        user: username,
-        username: username,
-        video_url: targetUrl,
-        title: title || "MIU Studio Architectural Generation",
-        platforms: dispatchPlatforms,
-      },
+      formData,
       {
         headers: {
           "Authorization": `Apikey ${apiKey}`,
-          "Content-Type": "application/json",
         },
       }
     );
