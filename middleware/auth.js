@@ -16,14 +16,15 @@ export function validateServiceKey(defaultServiceCode = "reel_30s") {
         sales_agent: 1,
         proposal_gen: 1,
         search_vault: 1,
+        social_broadcast: 2,  // Lightweight credit charge for multi-network broadcast
         voice_call: 10,
         reel_15s: 15,
-        reel_30s: 25,     // 25 credits per 30s Reel
+        reel_30s: 25,
         reel_60s: 40,
         archicad_bim: 10,
       };
 
-      const requiredCredits = FALLBACK_COSTS[serviceCode] || 25;
+      const requiredCredits = FALLBACK_COSTS[serviceCode] || 2;
 
       // 2. Check for Logged-in Web App User (Bearer Token)
       const authHeader = req.headers.authorization;
@@ -34,7 +35,7 @@ export function validateServiceKey(defaultServiceCode = "reel_30s") {
         if (user && !userError) {
           const { data: profile, error: profileError } = await supabase
             .from("profiles")
-            .select("id, credit_balance, email")
+            .select("id, credit_balance, email, tier")
             .eq("id", user.id)
             .single();
 
@@ -68,7 +69,17 @@ export function validateServiceKey(defaultServiceCode = "reel_30s") {
             `🔑 [Gateway] User '${profile.email}' authorized for '${serviceCode}' (-${requiredCredits} credits) | Balance: ${newBalance}`
           );
 
-          req.user = { ...profile, credit_balance: newBalance };
+          // Normalize both req.user and req.client so server.js handlers never crash
+          const clientPayload = {
+            id: profile.id,
+            user_id: user.id,
+            client_name: profile.email,
+            credit_balance: newBalance,
+            is_paid: profile.tier === "PRO" || newBalance > 100,
+          };
+
+          req.user = clientPayload;
+          req.client = clientPayload;
           return next();
         }
       }
@@ -77,17 +88,20 @@ export function validateServiceKey(defaultServiceCode = "reel_30s") {
       const apiKey =
         req.headers["x-api-key"] ||
         req.query.api_key ||
-        (req.body && req.body.api_key) ||
-        "miu_live_master_9f8a3c2b1a";
+        (req.body && req.body.api_key);
+
+      if (!apiKey) {
+        return res.status(401).json({ error: "Unauthorized: Missing API key or Bearer token." });
+      }
 
       const { data: client, error: clientError } = await supabase
         .from("clients")
         .select("*")
         .eq("api_key", apiKey)
-        .single();
+        .maybeSingle();
 
       if (clientError || !client) {
-        return res.status(403).json({ error: "Forbidden: Invalid API key or session." });
+        return res.status(403).json({ error: "Forbidden: Invalid API key." });
       }
 
       if (client.credit_balance < requiredCredits) {
@@ -117,6 +131,7 @@ export function validateServiceKey(defaultServiceCode = "reel_30s") {
       );
 
       req.client = { ...client, credit_balance: newClientBalance };
+      req.user = req.client;
       next();
     } catch (err) {
       console.error("❌ Gateway Auth Error:", err);
