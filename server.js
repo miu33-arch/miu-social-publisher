@@ -728,26 +728,20 @@ app.post("/api/social/broadcast", validateApiKeyAndCredits("social_broadcast"), 
     console.log(`📡 [Social Broadcast]: Dispatching reel across ${targetPlatforms.length} networks...`);
 
     const rawApiKey = (process.env.UPLOAD_POST_API_KEY || "").trim();
-    const authHeader = rawApiKey.startsWith("Bearer ")
-      ? rawApiKey
-      : rawApiKey.startsWith("Apikey ")
-      ? rawApiKey
-      : rawApiKey.startsWith("eyJ")
-      ? `Bearer ${rawApiKey}`
-      : `Apikey ${rawApiKey}`;
+    const apiKey = rawApiKey.replace(/^Bearer\s+|^Apikey\s+/i, "");
 
-    // Upload-Post unified post endpoint
+    // Upload-Post direct upload endpoint
     const response = await axios.post(
-      "https://api.upload-post.com/api/posts",
+      "https://api.upload-post.com/api/upload",
       {
-        video: videoUrl,
+        video_url: videoUrl,
         title: title || "MIU Studio Reel Generation",
         user: process.env.UPLOAD_POST_USER || "miu-studio",
         platforms: targetPlatforms,
       },
       {
         headers: {
-          "Authorization": authHeader,
+          "Authorization": `Apikey ${apiKey}`,
           "Content-Type": "application/json",
         },
       }
