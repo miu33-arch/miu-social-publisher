@@ -3,7 +3,7 @@ import cors from "cors";
 import dotenv from "dotenv";
 import axios from "axios";
 import { exec } from "child_process";
-import { Queue } from "bullmq";
+import { Queue, Worker } from "bullmq";
 import ioredis from "ioredis";
 import rateLimit from "express-rate-limit";
 import { fal } from "@fal-ai/client";
@@ -68,7 +68,57 @@ const connection = new ioredis(process.env.REDIS_URL, {
   tls: {},
 });
 
+// BullMQ Queue & Integrated Background Worker
 const videoQueue = new Queue("video-generation", { connection });
+
+const videoWorker = new Worker(
+  "video-generation",
+  async (job) => {
+    console.log(`\n⚡ [BullMQ Worker] Picked up Job #${job.id}: "${job.data.topic || job.data.visualPrompt}"`);
+    const { visualPrompt, topic, duration = 30, aspectRatio = "9:16", stylePreset = "cyberpunk", watermarked } = job.data;
+
+    try {
+      console.log(`🎨 [fal.ai] Synthesizing video reel for Job #${job.id}...`);
+
+      const falResult = await fal.subscribe("fal-ai/minimax-video/image-to-video", {
+        input: {
+          prompt: `${visualPrompt || topic}, photorealistic architectural visualization, 8k resolution, ${stylePreset} style aesthetic, highly detailed`,
+          aspect_ratio: aspectRatio === "9:16" ? "9:16" : "16:9",
+        },
+      });
+
+      const videoUrl = falResult.data?.video?.url || falResult.video?.url || falResult.data?.file?.url;
+
+      if (!videoUrl) {
+        throw new Error("fal.ai completed execution without returning a valid video URL.");
+      }
+
+      console.log(`✅ [BullMQ Worker] Job #${job.id} successfully rendered: ${videoUrl}`);
+
+      return {
+        videoUrl,
+        topic: topic || visualPrompt,
+        watermarked: Boolean(watermarked),
+        completedAt: new Date().toISOString(),
+      };
+    } catch (workerErr) {
+      console.error(`❌ [BullMQ Worker] Job #${job.id} failed:`, workerErr.message || workerErr);
+      throw workerErr;
+    }
+  },
+  {
+    connection,
+    concurrency: 2,
+  }
+);
+
+videoWorker.on("completed", (job) => {
+  console.log(`🎉 [BullMQ Queue] Job #${job.id} state updated to COMPLETED in Redis.`);
+});
+
+videoWorker.on("failed", (job, err) => {
+  console.error(`💥 [BullMQ Queue] Job #${job?.id} failed:`, err.message);
+});
 
 // Health Check
 app.get("/health", (req, res) => {
@@ -703,11 +753,20 @@ STRICT RULES:
 
 // Check Job Status
 app.get("/api/job/:id", async (req, res) => {
-  const job = await videoQueue.getJob(req.params.id);
-  if (!job) return res.status(404).json({ error: "Job not found." });
+  try {
+    const job = await videoQueue.getJob(req.params.id);
+    if (!job) return res.status(404).json({ error: "Job not found." });
 
-  const state = await job.getState();
-  res.json({ jobId: String(job.id), state, result: job.returnvalue || null });
+    const state = await job.getState();
+    res.json({
+      jobId: String(job.id),
+      state,
+      result: job.returnvalue || null,
+      failedReason: job.failedReason || null,
+    });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch job status: " + err.message });
+  }
 });
 
 // 📡 Social Broadcast Dispatch via Upload-Post (Multi-Channel)
@@ -821,5 +880,5 @@ app.post("/api/social/broadcast", validateApiKeyAndCredits("social_broadcast"), 
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
-  console.log(`\n🚀 Miu Studio API Gateway active at http://localhost:${PORT}`);
+  console.log(`\n🚀 Miu Studio API Gateway & BullMQ Worker active at http://localhost:${PORT}`);
 });
