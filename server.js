@@ -730,37 +730,43 @@ app.post("/api/social/broadcast", validateApiKeyAndCredits("social_broadcast"), 
 
   const rawApiKey = (process.env.UPLOAD_POST_API_KEY || "").trim();
   const apiKey = rawApiKey.replace(/^Bearer\s+|^Apikey\s+/i, "");
-  const username = (process.env.UPLOAD_POST_USERNAME || process.env.UPLOAD_POST_USER || "miu-studio").trim();
+  const username = (process.env.UPLOAD_POST_USER || process.env.UPLOAD_POST_USERNAME || "miu-studio").trim();
 
   if (!apiKey) {
     return res.status(500).json({ error: "Missing UPLOAD_POST_API_KEY in environment variables." });
   }
 
+  // Working fallback video URL if no video is provided
   let targetUrl = (videoUrl || "").trim();
-  if (!targetUrl || !targetUrl.startsWith("http") || targetUrl.includes("localhost")) {
-    targetUrl = "https://www.w3schools.com/html/mov_bbb.mp4";
+  if (!targetUrl || !targetUrl.startsWith("http") || targetUrl.includes("localhost") || targetUrl.includes("preview_sample.mp4")) {
+    targetUrl = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4";
   }
 
   console.log(`\n==============================================`);
-  console.log(`📡 [Social Broadcast] User: ${username}`);
+  console.log(`📡 [Social Broadcast] Profile: ${username}`);
   console.log(`📡 [Social Broadcast] Targets: [${dispatchPlatforms.join(", ")}]`);
-  console.log(`📡 [Social Broadcast] Video Source: ${targetUrl}`);
+  console.log(`📡 [Social Broadcast] Downloading: ${targetUrl}`);
   console.log(`==============================================\n`);
 
+  let videoBuffer;
   try {
-    // 1. Fetch video as binary Buffer
     const videoRes = await axios.get(targetUrl, {
       responseType: "arraybuffer",
       timeout: 30000,
     });
-    const videoBuffer = Buffer.from(videoRes.data);
+    videoBuffer = Buffer.from(videoRes.data);
+  } catch (downloadErr) {
+    console.error("❌ Failed to download source video:", downloadErr.message);
+    return res.status(400).json({
+      error: `Could not fetch video file from URL: ${targetUrl} (${downloadErr.message})`,
+    });
+  }
 
-    // 2. Build standard FormData with proper boundary
+  try {
     const formData = new FormData();
     formData.append("user", username);
     formData.append("title", title || "MIU Studio Architectural Generation");
-    
-    // Attach video as a proper File/Blob with MIME type and filename
+
     const fileBlob = new Blob([videoBuffer], { type: "video/mp4" });
     formData.append("video", fileBlob, "broadcast.mp4");
 
@@ -768,18 +774,13 @@ app.post("/api/social/broadcast", validateApiKeyAndCredits("social_broadcast"), 
       formData.append("platform[]", p);
     });
 
-    // 3. Post to Upload-Post with Authorization header
-    const response = await axios.post(
-      "https://api.upload-post.com/api/upload",
-      formData,
-      {
-        headers: {
-          "Authorization": `Apikey ${apiKey}`,
-        },
-        maxBodyLength: Infinity,
-        maxContentLength: Infinity,
-      }
-    );
+    const response = await axios.post("https://api.upload-post.com/api/upload", formData, {
+      headers: {
+        Authorization: `Apikey ${apiKey}`,
+      },
+      maxBodyLength: Infinity,
+      maxContentLength: Infinity,
+    });
 
     console.log(`✅ [Social Broadcast] Succeeded:`, response.data);
 
@@ -793,28 +794,11 @@ app.post("/api/social/broadcast", validateApiKeyAndCredits("social_broadcast"), 
     });
   } catch (err) {
     const status = err.response?.status || 500;
-    let detail = "";
-
-    if (err.response?.data) {
-      if (Buffer.isBuffer(err.response.data) || err.response.data instanceof Uint8Array) {
-        detail = new TextDecoder().decode(err.response.data);
-      } else if (typeof err.response.data === "object") {
-        detail = JSON.stringify(err.response.data);
-      } else {
-        detail = String(err.response.data);
-      }
-    } else {
-      detail = err.message || "Unknown error";
-    }
-
-    if (detail.includes("<!DOCTYPE") || detail.includes("<html")) {
-      detail = `External service returned ${status} Not Found. Verify your UPLOAD_POST_API_KEY and connected accounts at upload-post.com.`;
-    }
-
+    const detail = err.response?.data ? JSON.stringify(err.response.data) : err.message;
     console.error(`❌ [Upload-Post Failed (${status})]:`, detail);
 
     return res.status(status).json({
-      error: `Broadcast failed (${status}): ${detail}`,
+      error: `Upload-Post error (${status}): ${detail}`,
     });
   }
 });
