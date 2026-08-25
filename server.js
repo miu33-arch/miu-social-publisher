@@ -728,39 +728,47 @@ app.post("/api/social/broadcast", validateApiKeyAndCredits("social_broadcast"), 
   const finalPlatforms = incoming.filter((p) => allowedSet.has(p));
   const dispatchPlatforms = finalPlatforms.length > 0 ? finalPlatforms : connectedPlatforms;
 
+  const rawApiKey = (process.env.UPLOAD_POST_API_KEY || "").trim();
+  const apiKey = rawApiKey.replace(/^Bearer\s+|^Apikey\s+/i, "");
+  const username = (process.env.UPLOAD_POST_USERNAME || process.env.UPLOAD_POST_USER || "miu-studio").trim();
+
+  if (!apiKey) {
+    return res.status(500).json({ error: "Missing UPLOAD_POST_API_KEY in environment variables." });
+  }
+
+  let targetUrl = (videoUrl || "").trim();
+  if (!targetUrl || !targetUrl.startsWith("http") || targetUrl.includes("localhost")) {
+    targetUrl = "https://www.w3schools.com/html/mov_bbb.mp4";
+  }
+
+  console.log(`\n==============================================`);
+  console.log(`📡 [Social Broadcast] User: ${username}`);
+  console.log(`📡 [Social Broadcast] Targets: [${dispatchPlatforms.join(", ")}]`);
+  console.log(`📡 [Social Broadcast] Video Source: ${targetUrl}`);
+  console.log(`==============================================\n`);
+
   try {
-    const rawApiKey = (process.env.UPLOAD_POST_API_KEY || "").trim();
-    const apiKey = rawApiKey.replace(/^Bearer\s+|^Apikey\s+/i, "");
-    const username = (process.env.UPLOAD_POST_USERNAME || process.env.UPLOAD_POST_USER || "miu-studio").trim();
-
-    let targetUrl = (videoUrl || "").trim();
-    if (!targetUrl || !targetUrl.startsWith("http") || targetUrl.includes("localhost")) {
-      targetUrl = "https://www.w3schools.com/html/mov_bbb.mp4";
-    }
-
-    console.log(`\n==============================================`);
-    console.log(`📡 [Social Broadcast] User: ${username}`);
-    console.log(`📡 [Social Broadcast] Targets: [${dispatchPlatforms.join(", ")}]`);
-    console.log(`📡 [Social Broadcast] Video: ${targetUrl}`);
-    console.log(`==============================================\n`);
-
-    // Download small buffer
-    const videoRes = await axios.get(targetUrl, { 
+    // 1. Fetch video as binary Buffer
+    const videoRes = await axios.get(targetUrl, {
       responseType: "arraybuffer",
-      timeout: 15000 
+      timeout: 30000,
     });
-    const videoBlob = new Blob([videoRes.data], { type: "video/mp4" });
+    const videoBuffer = Buffer.from(videoRes.data);
 
+    // 2. Build standard FormData with proper boundary
     const formData = new FormData();
     formData.append("user", username);
-    formData.append("username", username);
-    formData.append("video", videoBlob, "broadcast.mp4");
     formData.append("title", title || "MIU Studio Architectural Generation");
+    
+    // Attach video as a proper File/Blob with MIME type and filename
+    const fileBlob = new Blob([videoBuffer], { type: "video/mp4" });
+    formData.append("video", fileBlob, "broadcast.mp4");
 
     dispatchPlatforms.forEach((p) => {
       formData.append("platform[]", p);
     });
 
+    // 3. Post to Upload-Post with Authorization header
     const response = await axios.post(
       "https://api.upload-post.com/api/upload",
       formData,
@@ -768,6 +776,8 @@ app.post("/api/social/broadcast", validateApiKeyAndCredits("social_broadcast"), 
         headers: {
           "Authorization": `Apikey ${apiKey}`,
         },
+        maxBodyLength: Infinity,
+        maxContentLength: Infinity,
       }
     );
 
@@ -783,13 +793,28 @@ app.post("/api/social/broadcast", validateApiKeyAndCredits("social_broadcast"), 
     });
   } catch (err) {
     const status = err.response?.status || 500;
-    const errData = err.response?.data;
-    const detail = typeof errData === "object" ? JSON.stringify(errData) : (errData || err.message);
-    
+    let detail = "";
+
+    if (err.response?.data) {
+      if (Buffer.isBuffer(err.response.data) || err.response.data instanceof Uint8Array) {
+        detail = new TextDecoder().decode(err.response.data);
+      } else if (typeof err.response.data === "object") {
+        detail = JSON.stringify(err.response.data);
+      } else {
+        detail = String(err.response.data);
+      }
+    } else {
+      detail = err.message || "Unknown error";
+    }
+
+    if (detail.includes("<!DOCTYPE") || detail.includes("<html")) {
+      detail = `External service returned ${status} Not Found. Verify your UPLOAD_POST_API_KEY and connected accounts at upload-post.com.`;
+    }
+
     console.error(`❌ [Upload-Post Failed (${status})]:`, detail);
 
-    return res.status(status).json({ 
-      error: `Broadcast failed (${status}): ${detail}` 
+    return res.status(status).json({
+      error: `Broadcast failed (${status}): ${detail}`,
     });
   }
 });
