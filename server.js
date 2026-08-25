@@ -711,6 +711,7 @@ app.get("/api/job/:id", async (req, res) => {
   const state = await job.getState();
   res.json({ jobId: String(job.id), state, result: job.returnvalue || null });
 });
+
 // 📡 Social Broadcast Dispatch via Upload-Post (Multi-Channel)
 app.post("/api/social/broadcast", validateApiKeyAndCredits("social_broadcast"), async (req, res) => {
   const { videoUrl, title, platforms } = req.body;
@@ -718,17 +719,15 @@ app.post("/api/social/broadcast", validateApiKeyAndCredits("social_broadcast"), 
   const connectedPlatforms = ["youtube", "instagram", "linkedin", "x", "google_business"];
   const allowedSet = new Set(connectedPlatforms);
 
-  // Normalize and deduplicate platform targets
-  const rawPlatforms = Array.isArray(platforms) && platforms.length > 0 ? platforms : connectedPlatforms;
-  const normalized = rawPlatforms.map((p) => {
+  const incoming = (Array.isArray(platforms) && platforms.length > 0 ? platforms : connectedPlatforms).map((p) => {
     const clean = String(p).toLowerCase().trim();
     if (clean === "google_business_profile" || clean === "gmb") return "google_business";
     if (clean === "twitter") return "x";
     return clean;
   });
 
-  const dispatchPlatforms = [...new Set(normalized.filter((p) => allowedSet.has(p)))];
-  const targetPlatforms = dispatchPlatforms.length > 0 ? dispatchPlatforms : connectedPlatforms;
+  const finalPlatforms = incoming.filter((p) => allowedSet.has(p));
+  const dispatchPlatforms = finalPlatforms.length > 0 ? finalPlatforms : connectedPlatforms;
 
   const rawApiKey = (process.env.UPLOAD_POST_API_KEY || "").trim();
   const apiKey = rawApiKey.replace(/^Bearer\s+|^Apikey\s+/i, "");
@@ -738,32 +737,35 @@ app.post("/api/social/broadcast", validateApiKeyAndCredits("social_broadcast"), 
     return res.status(500).json({ error: "Missing UPLOAD_POST_API_KEY in environment variables." });
   }
 
-  // Sanitize video URL & block local/private network ranges
+  // Reliable Public CDN Fallback (Prevents 403 Google Cloud Bucket blocks)
   let targetUrl = (videoUrl || "").trim();
-  const isInvalidUrl =
+  if (
     !targetUrl ||
-    !/^https?:\/\//i.test(targetUrl) ||
-    /^(https?:\/\/)?(localhost|127\.|10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.|192\.168\.|169\.254\.)/i.test(targetUrl) ||
-    targetUrl.includes("preview_sample.mp4");
-
-  if (isInvalidUrl) {
-    targetUrl = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4";
+    !targetUrl.startsWith("http") ||
+    targetUrl.includes("localhost") ||
+    targetUrl.includes("preview_sample.mp4") ||
+    targetUrl.includes("gtv-videos-bucket")
+  ) {
+    targetUrl = "https://vjs.zencdn.net/v/oceans.mp4";
   }
 
   console.log(`\n==============================================`);
   console.log(`📡 [Social Broadcast] Profile: ${username}`);
-  console.log(`📡 [Social Broadcast] Targets: [${targetPlatforms.join(", ")}]`);
-  console.log(`📡 [Social Broadcast] Source:  ${targetUrl}`);
+  console.log(`📡 [Social Broadcast] Targets: [${dispatchPlatforms.join(", ")}]`);
+  console.log(`📡 [Social Broadcast] Downloading: ${targetUrl}`);
   console.log(`==============================================\n`);
 
-  let videoStream;
+  let videoBuffer;
   try {
     const videoRes = await axios.get(targetUrl, {
-      responseType: "stream",
+      responseType: "arraybuffer",
       timeout: 30000,
-      maxContentLength: 500 * 1024 * 1024, // 500 MB limit
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "*/*"
+      },
     });
-    videoStream = videoRes.data;
+    videoBuffer = Buffer.from(videoRes.data);
   } catch (downloadErr) {
     console.error("❌ Failed to download source video:", downloadErr.message);
     return res.status(400).json({
@@ -774,17 +776,12 @@ app.post("/api/social/broadcast", validateApiKeyAndCredits("social_broadcast"), 
   try {
     const formData = new FormData();
     formData.append("user", username);
-    formData.append("title", title || "Studio Broadcast");
-    
-    // Convert Node stream to Blob for native FormData support (Node 18+)
-    const chunks = [];
-    for await (const chunk of videoStream) {
-      chunks.push(chunk);
-    }
-    const fileBlob = new Blob(chunks, { type: "video/mp4" });
+    formData.append("title", title || "MIU Studio Architectural Generation");
+
+    const fileBlob = new Blob([videoBuffer], { type: "video/mp4" });
     formData.append("video", fileBlob, "broadcast.mp4");
 
-    targetPlatforms.forEach((p) => {
+    dispatchPlatforms.forEach((p) => {
       formData.append("platform[]", p);
     });
 
@@ -792,7 +789,6 @@ app.post("/api/social/broadcast", validateApiKeyAndCredits("social_broadcast"), 
       headers: {
         Authorization: `Apikey ${apiKey}`,
       },
-      timeout: 120000, // 2-minute upload window
       maxBodyLength: Infinity,
       maxContentLength: Infinity,
     });
@@ -802,10 +798,10 @@ app.post("/api/social/broadcast", validateApiKeyAndCredits("social_broadcast"), 
     return res.json({
       success: true,
       data: response.data,
-      platforms: targetPlatforms,
-      message: `Broadcast initiated across ${targetPlatforms.length} channels (${targetPlatforms.join(", ")}).`,
-      remainingCredits: req.client?.credit_balance ?? null,
-      isPaidTier: req.client?.is_paid || ((req.client?.credit_balance ?? 0) > 100),
+      platforms: dispatchPlatforms,
+      message: `Broadcast initiated across ${dispatchPlatforms.length} channels (${dispatchPlatforms.join(", ")}).`,
+      remainingCredits: req.client.credit_balance,
+      isPaidTier: req.client.is_paid || (req.client.credit_balance > 100),
     });
   } catch (err) {
     const status = err.response?.status || 500;
