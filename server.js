@@ -737,18 +737,19 @@ app.post("/api/social/broadcast", validateApiKeyAndCredits("social_broadcast"), 
     return res.status(500).json({ error: "Missing UPLOAD_POST_API_KEY in environment variables." });
   }
 
-  // Reliable Public CDN Fallback (Prevents 403 Google Cloud Bucket blocks)
-  let targetUrl = (videoUrl || "").trim();
+ // Strict URL Validation: Reject missing or placeholder videos
+  const targetUrl = (videoUrl || "").trim();
   if (
     !targetUrl ||
     !targetUrl.startsWith("http") ||
-    targetUrl.includes("localhost") ||
     targetUrl.includes("preview_sample.mp4") ||
-    targetUrl.includes("gtv-videos-bucket")
+    targetUrl.includes("localhost") ||
+    targetUrl.includes("127.0.0.1")
   ) {
-    targetUrl = "https://vjs.zencdn.net/v/oceans.mp4";
+    return res.status(400).json({
+      error: "No valid generated video URL provided for broadcast. Please wait for the reel to render.",
+    });
   }
-
   console.log(`\n==============================================`);
   console.log(`📡 [Social Broadcast] Profile: ${username}`);
   console.log(`📡 [Social Broadcast] Targets: [${dispatchPlatforms.join(", ")}]`);
