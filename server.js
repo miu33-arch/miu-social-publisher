@@ -774,9 +774,15 @@ app.post("/api/social/broadcast", validateApiKeyAndCredits("social_broadcast"), 
   }
 
   try {
+    // Enforce 100-character max limit for YouTube Data API
+    const rawTitle = (title || "MIU Studio Architectural Generation").trim();
+    const safeTitle = rawTitle.length > 95 
+      ? `${rawTitle.slice(0, 92)}...` 
+      : rawTitle;
+
     const formData = new FormData();
     formData.append("user", username);
-    formData.append("title", title || "MIU Studio Architectural Generation");
+    formData.append("title", safeTitle);
 
     const fileBlob = new Blob([videoBuffer], { type: "video/mp4" });
     formData.append("video", fileBlob, "broadcast.mp4");
@@ -794,7 +800,6 @@ app.post("/api/social/broadcast", validateApiKeyAndCredits("social_broadcast"), 
     });
 
     console.log(`✅ [Social Broadcast] Succeeded:`, response.data);
-
     return res.json({
       success: true,
       data: response.data,
