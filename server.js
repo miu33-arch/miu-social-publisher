@@ -421,7 +421,6 @@ app.post("/api/voice/dispatch", validateApiKeyAndCredits("voice_call"), async (r
     return res.status(400).json({ error: "Phone number is required." });
   }
 
-  // Sanitize and format to strict international standard (E.164)
   let cleanNumber = phoneNumber.replace(/[^0-9+]/g, "");
   if (!cleanNumber.startsWith("+")) cleanNumber = "+" + cleanNumber;
 
@@ -450,7 +449,6 @@ app.post("/api/voice/dispatch", validateApiKeyAndCredits("voice_call"), async (r
       }
     );
 
-    // Validate response from Bland API
     if (response.data.status === "error" || !response.data.call_id) {
       console.error("❌ Bland AI Rejection:", response.data);
       return res.status(502).json({
@@ -737,7 +735,7 @@ app.post("/api/social/broadcast", validateApiKeyAndCredits("social_broadcast"), 
     return res.status(500).json({ error: "Missing UPLOAD_POST_API_KEY in environment variables." });
   }
 
- // Strict URL Validation: Reject missing or placeholder videos
+  // Strict URL Validation: Reject missing, localhost, or placeholder test videos
   const targetUrl = (videoUrl || "").trim();
   if (
     !targetUrl ||
@@ -750,6 +748,7 @@ app.post("/api/social/broadcast", validateApiKeyAndCredits("social_broadcast"), 
       error: "No valid generated video URL provided for broadcast. Please wait for the reel to render.",
     });
   }
+
   console.log(`\n==============================================`);
   console.log(`📡 [Social Broadcast] Profile: ${username}`);
   console.log(`📡 [Social Broadcast] Targets: [${dispatchPlatforms.join(", ")}]`);
