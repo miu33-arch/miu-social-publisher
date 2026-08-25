@@ -80,10 +80,11 @@ const videoWorker = new Worker(
     try {
       console.log(`🎨 [fal.ai] Synthesizing video reel for Job #${job.id}...`);
 
-      const falResult = await fal.subscribe("fal-ai/minimax-video/image-to-video", {
+      // Fixed: Switched from image-to-video to direct Text-to-Video endpoint
+      const falResult = await fal.subscribe("fal-ai/minimax-video", {
         input: {
-          prompt: `${visualPrompt || topic}, photorealistic architectural visualization, 8k resolution, ${stylePreset} style aesthetic, highly detailed`,
-          aspect_ratio: aspectRatio === "9:16" ? "9:16" : "16:9",
+          prompt: `${visualPrompt || topic}, photorealistic architectural visualization, 8k resolution, ${stylePreset} style aesthetic, highly detailed, cinematic atmosphere`,
+          prompt_optimizer: true,
         },
       });
 
