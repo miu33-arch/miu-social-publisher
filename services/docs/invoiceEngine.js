@@ -1,6 +1,7 @@
 import { GoogleGenAI } from "@google/genai";
 import puppeteer from "puppeteer";
 import path from "path";
+import fs from "fs";
 import { generateZatcaTlvQr } from "./zatcaTlv.js";
 
 const ai = new GoogleGenAI({});
@@ -13,6 +14,23 @@ function cleanNumber(val, fallback = 0) {
   const sanitized = String(val || "").replace(/[^0-9.-]+/g, "");
   const parsed = parseFloat(sanitized);
   return isNaN(parsed) ? fallback : parsed;
+}
+
+/**
+ * Utility: Read local image and encode to Base64 data URI for safe PDF embedding
+ */
+function getLocalImageBase64(relativeOrAbsPath) {
+  try {
+    const resolvedPath = path.resolve(relativeOrAbsPath);
+    if (fs.existsSync(resolvedPath)) {
+      const bitmap = fs.readFileSync(resolvedPath);
+      const ext = path.extname(resolvedPath).replace(".", "") || "png";
+      return `data:image/${ext};base64,${bitmap.toString("base64")}`;
+    }
+  } catch (err) {
+    console.warn(`[INVOICE_ENGINE] Image conversion error (${relativeOrAbsPath}):`, err.message);
+  }
+  return null;
 }
 
 /**
@@ -119,6 +137,19 @@ Items: ${JSON.stringify(processedItems.map(i => ({ code: i.code, name: i.name })
     console.warn("[INVOICE_ENGINE] ZATCA QR generation warning:", qrErr.message);
   }
 
+  // 6. Resolve Local Wallet QR Images (Checks persistent assets folder first, then frontend public)
+  const urpayQrBase64 = 
+    getLocalImageBase64("./assets/urpay-qr.png") || 
+    getLocalImageBase64("./outputs/urpay-qr.png") || 
+    getLocalImageBase64("./public/urpay-qr.png") ||
+    getLocalImageBase64("../studio-frontend/public/urpay-qr.png");
+
+  const stcQrBase64 = 
+    getLocalImageBase64("./assets/stc-qr.png") || 
+    getLocalImageBase64("./outputs/stc-qr.png") || 
+    getLocalImageBase64("./public/stc-qr.png") ||
+    getLocalImageBase64("../studio-frontend/public/stc-qr.png");
+
   const htmlDoc = `
     <!DOCTYPE html>
     <html>
@@ -140,19 +171,47 @@ Items: ${JSON.stringify(processedItems.map(i => ({ code: i.code, name: i.name })
         .party-title { font-size: 7.5pt; font-weight: 700; color: #475569; margin-bottom: 3px; display: flex; justify-content: space-between; }
         .party-name { font-size: 8.5pt; font-weight: 700; color: #0f172a; }
 
-        table { width: 100%; border-collapse: collapse; margin-top: 10px; margin-bottom: 16px; }
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; margin-bottom: 14px; }
         th, td { border: 1px solid #cbd5e1; padding: 8px 10px; text-align: left; vertical-align: top; }
         th { background: #0f172a; color: #fff; font-size: 7pt; text-transform: uppercase; font-weight: 600; }
         .ar-cell { font-family: 'Cairo', sans-serif; direction: rtl; text-align: right; color: #475569; font-size: 7.5pt; margin-top: 2px; }
         .zh-cell { font-family: 'Noto Sans SC', sans-serif; color: #64748b; font-size: 7.2pt; margin-top: 2px; }
         .mono { font-family: 'JetBrains Mono', monospace; font-weight: 600; }
 
-        .summary-container { display: flex; justify-content: flex-end; margin-top: 8px; }
-        .summary-box { width: 300px; border: 1px solid #cbd5e1; background: #f8fafc; }
+        .summary-container { display: flex; justify-content: flex-end; margin-top: 6px; }
+        .summary-box { width: 320px; border: 1px solid #cbd5e1; background: #f8fafc; }
         .summary-row { display: flex; justify-content: space-between; padding: 6px 10px; border-bottom: 1px solid #e2e8f0; font-size: 7.5pt; }
         .summary-row.total { font-weight: 700; font-size: 9pt; background: #0f172a; color: #fff; border-bottom: none; }
 
-        .footer { margin-top: 24px; border-top: 1px solid #cbd5e1; padding-top: 10px; font-size: 6.8pt; color: #64748b; display: flex; justify-content: space-between; }
+        /* Official Settlement Coordinates Box */
+        .settlement-box {
+          margin-top: 18px;
+          border: 1px solid #cbd5e1;
+          padding: 12px 14px;
+          background: #f8fafc;
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          font-family: 'JetBrains Mono', monospace;
+          page-break-inside: avoid;
+        }
+        .settlement-title {
+          font-weight: 700;
+          color: #0284c7;
+          font-size: 8.5pt;
+          margin-bottom: 4px;
+        }
+        .settlement-details {
+          font-size: 7.5pt;
+          color: #334155;
+          line-height: 1.5;
+        }
+        .settlement-qr-col {
+          text-align: center;
+          min-width: 75px;
+        }
+
+        .footer { margin-top: 20px; border-top: 1px solid #cbd5e1; padding-top: 10px; font-size: 6.8pt; color: #64748b; display: flex; justify-content: space-between; }
       </style>
     </head>
     <body>
@@ -229,6 +288,37 @@ Items: ${JSON.stringify(processedItems.map(i => ({ code: i.code, name: i.name })
         </div>
       </div>
 
+      <!-- DIRECT B2B SETTLEMENT & WIRE COORDINATES (DUAL QR) -->
+      <div class="settlement-box">
+        <div class="settlement-details">
+          <div class="settlement-title">SETTLEMENT &amp; WIRE INSTRUCTIONS // تعليمات السداد</div>
+          <div><strong>BENEFICIARY:</strong> ANAMY DE LA CRUZ PADILLA</div>
+          <div><strong>URPAY / SARIE IBAN:</strong> SA4880207781501222121011</div>
+          <div><strong>STC BANK IBAN:</strong> SA277800000001261965468</div>
+          <div style="font-size: 6.8pt; color: #64748b; margin-top: 4px;">
+            * Include Invoice Reference <strong>(${invNumber})</strong> in the wire transfer narrative for instant clearance.
+          </div>
+        </div>
+
+        <div style="display: flex; gap: 12px; border-left: 1px solid #cbd5e1; padding-left: 14px;">
+          <!-- urpay QR -->
+          <div class="settlement-qr-col">
+            ${urpayQrBase64 
+              ? `<img src="${urpayQrBase64}" style="width: 72px; height: 72px; border: 1px solid #cbd5e1; background: #fff; padding: 2px;" alt="urpay QR" />` 
+              : `<div style="width: 72px; height: 72px; border: 1px dashed #cbd5e1; display: flex; align-items: center; justify-content: center; font-size: 5pt; color: #94a3b8;">URPAY</div>`}
+            <div style="font-size: 5.8pt; color: #0284c7; font-weight: bold; margin-top: 2px;">SCAN URPAY</div>
+          </div>
+
+          <!-- STC Bank QR -->
+          <div class="settlement-qr-col">
+            ${stcQrBase64 
+              ? `<img src="${stcQrBase64}" style="width: 72px; height: 72px; border: 1px solid #cbd5e1; background: #fff; padding: 2px;" alt="STC QR" />` 
+              : `<div style="width: 72px; height: 72px; border: 1px dashed #cbd5e1; display: flex; align-items: center; justify-content: center; font-size: 5pt; color: #94a3b8;">STC BANK</div>`}
+            <div style="font-size: 5.8pt; color: #7c3aed; font-weight: bold; margin-top: 2px;">SCAN STC PAY</div>
+          </div>
+        </div>
+      </div>
+
       <div class="footer">
         <div>MIU SOVEREIGN COMMERCE // ZATCA &amp; GCC VAT COMPLIANT ELECTRONIC INVOICE</div>
         <div style="font-family:'JetBrains Mono', monospace;">AUDIT HASH: ${base64Tlv ? base64Tlv.slice(0, 16) : "VERIFIED"}...</div>
@@ -239,7 +329,8 @@ Items: ${JSON.stringify(processedItems.map(i => ({ code: i.code, name: i.name })
 
   const browser = await puppeteer.launch({
     headless: "new",
-    args: ["--no-sandbox", "--disable-setuid-sandbox"]
+    executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || "/usr/bin/chromium",
+    args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
   });
   const page = await browser.newPage();
   await page.setContent(htmlDoc, { waitUntil: "networkidle0" });

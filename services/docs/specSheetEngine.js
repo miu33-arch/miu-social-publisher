@@ -40,7 +40,7 @@ const SECTOR_PROFILES = {
 /**
  * Multi-Domain Technical Spec & BOM Localization Engine
  * Supports Architecture, MEP, Industrial CNC, Electronics, and FF&E.
- * Compiles localized PDF submittals with bilingual factory cross-referencing and compliance disclaimers.
+ * Compiles localized PDF submittals with paywall watermarks for unverified accounts.
  */
 export async function processTechnicalSpecSheet({
   rawData,
@@ -48,7 +48,8 @@ export async function processTechnicalSpecSheet({
   targetLang = "ar",
   projectCode = "BOM-GCC-2026",
   sector = "architecture",
-  includeOriginalSubtext = true
+  includeOriginalSubtext = true,
+  isPaid = false
 }) {
   const activeSector = SECTOR_PROFILES[sector] || SECTOR_PROFILES.general;
 
@@ -84,29 +85,69 @@ Translate this technical payload from "${sourceLang}" to "${targetLang}":
 }
 `;
 
-  const aiResponse = await ai.models.generateContent({
-    model: "gemini-2.5-flash",
-    contents: [
-      {
-        text: `${translationPrompt}\n\nRAW_PAYLOAD:\n${JSON.stringify(rawData, null, 2)}`
-      }
-    ],
-    config: { responseMimeType: "application/json" }
-  });
+  const rawItems = Array.isArray(rawData?.items) ? rawData.items : [];
+  const CHUNK_SIZE = 25;
+  let allLocalizedItems = [];
+  let resolvedTitle = "";
+  let resolvedHeaders = null;
 
-  const localizedData = JSON.parse(aiResponse.text);
+  if (rawItems.length === 0) {
+    const aiResponse = await ai.models.generateContent({
+      model: "gemini-2.5-flash",
+      contents: [
+        {
+          text: `${translationPrompt}\n\nRAW_PAYLOAD:\n${JSON.stringify(rawData, null, 2)}`
+        }
+      ],
+      config: { responseMimeType: "application/json" }
+    });
+    const parsed = JSON.parse(aiResponse.text);
+    resolvedTitle = parsed.documentTitle;
+    resolvedHeaders = parsed.headers;
+    allLocalizedItems = parsed.items || [];
+  } else {
+    for (let i = 0; i < rawItems.length; i += CHUNK_SIZE) {
+      const chunk = rawItems.slice(i, i + CHUNK_SIZE);
+      const aiResponse = await ai.models.generateContent({
+        model: "gemini-2.5-flash",
+        contents: [
+          {
+            text: `${translationPrompt}\n\nRAW_PAYLOAD:\n${JSON.stringify({ items: chunk }, null, 2)}`
+          }
+        ],
+        config: { responseMimeType: "application/json" }
+      });
+
+      const parsedChunk = JSON.parse(aiResponse.text);
+      if (!resolvedTitle && parsedChunk.documentTitle) {
+        resolvedTitle = parsedChunk.documentTitle;
+      }
+      if (!resolvedHeaders && parsedChunk.headers) {
+        resolvedHeaders = parsedChunk.headers;
+      }
+      if (Array.isArray(parsedChunk.items)) {
+        allLocalizedItems.push(...parsedChunk.items);
+      }
+    }
+  }
+
+  const localizedData = {
+    documentTitle: resolvedTitle,
+    headers: resolvedHeaders,
+    items: allLocalizedItems
+  };
+
   const isRtl = targetLang === "ar";
   const timestamp = Date.now();
-  const outputPath = path.resolve(`./outputs/spec_${projectCode}_${targetLang}_${timestamp}.pdf`);
-
-  const rawItems = Array.isArray(rawData?.items) ? rawData.items : [];
+  const filePrefix = isPaid ? "spec_RELEASED" : "spec_PREVIEW_WATERMARKED";
+  const outputPath = path.resolve(`./outputs/${filePrefix}_${projectCode}_${targetLang}_${timestamp}.pdf`);
 
   const htmlDoc = `
     <!DOCTYPE html>
     <html dir="${isRtl ? "rtl" : "ltr"}" lang="${targetLang}">
     <head>
       <meta charset="utf-8">
-      <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;600&family=Inter:wght@400;600;700&display=swap">
+      <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;600;800&family=Inter:wght@400;600;700&display=swap">
       <style>
         :root {
           --font-body: ${isRtl ? "'Cairo', sans-serif" : targetLang === "zh" ? "'Noto Sans SC', sans-serif" : "'Inter', 'JetBrains Mono', sans-serif"};
@@ -114,14 +155,60 @@ Translate this technical payload from "${sourceLang}" to "${targetLang}":
           --font-cn: 'Noto Sans SC', sans-serif;
         }
         * { box-sizing: border-box; margin: 0; padding: 0; }
+        
+        @page {
+          size: A4 portrait;
+          margin: 14mm 12mm 18mm 12mm;
+        }
+
         body {
           font-family: var(--font-body);
           font-size: 0.82rem;
           line-height: 1.4;
           background: #ffffff;
           color: #0f172a;
-          padding: 12mm 15mm;
+          padding: 0;
+          margin: 0;
+          position: relative;
+          -webkit-print-color-adjust: exact;
+          print-color-adjust: exact;
         }
+
+        ${!isPaid ? `
+        /* Unpaid Watermark Overlay */
+        .watermark {
+          position: fixed;
+          top: 40%;
+          left: -15%;
+          width: 130%;
+          text-align: center;
+          transform: rotate(-35deg);
+          font-size: 32pt;
+          font-weight: 800;
+          font-family: 'JetBrains Mono', monospace;
+          color: rgba(220, 38, 38, 0.16);
+          border: 4px dashed rgba(220, 38, 38, 0.22);
+          padding: 16px 0;
+          letter-spacing: 3px;
+          pointer-events: none;
+          z-index: 9999;
+        }
+
+        .unpaid-notice-bar {
+          background: #fee2e2;
+          border: 1px solid #ef4444;
+          color: #991b1b;
+          font-family: var(--font-mono);
+          font-size: 0.65rem;
+          font-weight: 700;
+          padding: 6px 10px;
+          margin-bottom: 12px;
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+        }
+        ` : ""}
+
         .header {
           border-bottom: 2px solid #0284c7;
           padding-bottom: 12px;
@@ -129,19 +216,24 @@ Translate this technical payload from "${sourceLang}" to "${targetLang}":
           display: flex;
           justify-content: space-between;
           align-items: flex-end;
+          page-break-after: avoid;
+          break-after: avoid;
         }
+
         .doc-title {
           font-size: 1.15rem;
           font-weight: 700;
           color: #0f172a;
           margin-bottom: 4px;
         }
+
         .doc-meta {
           font-size: 0.72rem;
           color: #64748b;
           font-family: var(--font-mono);
           letter-spacing: 0.5px;
         }
+
         .sector-tag {
           font-size: 0.68rem;
           background: #f0f9ff;
@@ -152,18 +244,26 @@ Translate this technical payload from "${sourceLang}" to "${targetLang}":
           font-weight: 600;
           text-transform: uppercase;
         }
+
         .spec-grid {
           width: 100%;
           border-collapse: collapse;
           table-layout: fixed;
           margin-top: 8px;
+          page-break-inside: auto;
         }
+
+        thead { display: table-header-group; }
+        tbody { display: table-row-group; }
+        tr { page-break-inside: avoid; break-inside: avoid; }
+
         .spec-grid th, .spec-grid td {
           border: 1px solid #cbd5e1;
           padding: 8px 10px;
           text-align: start;
           vertical-align: top;
         }
+
         .spec-grid th {
           background: #f8fafc;
           color: #334155;
@@ -172,21 +272,25 @@ Translate this technical payload from "${sourceLang}" to "${targetLang}":
           text-transform: uppercase;
           letter-spacing: 0.5px;
         }
+
         .code-cell {
           font-family: var(--font-mono);
           font-weight: 700;
           color: #0f172a;
           font-size: 0.78rem;
         }
+
         .primary-text {
           font-weight: 600;
           color: #0f172a;
         }
+
         .detail-text {
           font-size: 0.74rem;
           color: #475569;
           margin-top: 2px;
         }
+
         .sub-cn {
           font-family: var(--font-cn);
           font-size: 0.68rem;
@@ -194,14 +298,16 @@ Translate this technical payload from "${sourceLang}" to "${targetLang}":
           margin-top: 2px;
           display: block;
         }
+
         .standard-pill {
           color: #059669;
           font-weight: 600;
           font-size: 0.74rem;
           font-family: var(--font-mono);
         }
+
         .legal-footer {
-          margin-top: 24px;
+          margin-top: 20px;
           border-top: 1px solid #cbd5e1;
           padding-top: 10px;
           display: flex;
@@ -211,17 +317,22 @@ Translate this technical payload from "${sourceLang}" to "${targetLang}":
           font-size: 0.66rem;
           color: #64748b;
           line-height: 1.4;
-        }
-        .footer-meta {
-          text-align: end;
-          min-width: 160px;
-          font-family: var(--font-mono);
-          font-size: 0.64rem;
-          color: #94a3b8;
+          page-break-inside: avoid;
+          break-inside: avoid;
         }
       </style>
     </head>
     <body>
+      ${!isPaid ? `
+        <div class="watermark">
+          PROFORMA PREVIEW // UNPAID<br>NOT FOR MUNICIPAL FILING
+        </div>
+        <div class="unpaid-notice-bar">
+          <span>⚠ PRE-SUBMITTAL PROVIEW (UNVERIFIED)</span>
+          <span>SETTLE INVOICE VIA URPAY / STC TO RELEASE OFFICIAL MOMRAH DOSSIER</span>
+        </div>
+      ` : ""}
+
       <div class="header">
         <div>
           <div class="doc-title">${localizedData.documentTitle || activeSector.title}</div>
@@ -243,7 +354,6 @@ Translate this technical payload from "${sourceLang}" to "${targetLang}":
           ${(localizedData.items || []).map((row, idx) => {
             const rawRow = rawItems[idx] || {};
 
-            // Deduplicate subtext: only render if original exists and differs from localized text
             const showSubName = Boolean(
               includeOriginalSubtext &&
               rawRow.name &&
@@ -291,12 +401,7 @@ Translate this technical payload from "${sourceLang}" to "${targetLang}":
       <footer class="legal-footer">
         <div style="flex: 1;">
           <strong>DISCLAIMER &amp; COMPLIANCE NOTICE:</strong>
-          This technical specification and standard parity matrix are compiled for engineering coordination and municipal pre-submittal review. Final filing to official regulatory portals (MOMRAH / Balady / SABER / SASO) requires formal verification and endorsement by the licensed Engineer of Record.
-        </div>
-        <div class="footer-meta">
-          <div>REF: ${projectCode}</div>
-          <div>MIU SOVEREIGN CORE</div>
-          <div>PAGE 1 OF 1</div>
+          This technical specification and standard parity matrix are compiled for engineering coordination. Final municipal submission to MOMRAH / Balady / SABER / SASO requires formal verification and endorsement by the licensed Engineer of Record.
         </div>
       </footer>
     </body>
@@ -305,7 +410,13 @@ Translate this technical payload from "${sourceLang}" to "${targetLang}":
 
   const browser = await puppeteer.launch({
     headless: "new",
-    args: ["--no-sandbox", "--disable-setuid-sandbox"]
+    executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || "/usr/bin/chromium",
+    args: [
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-dev-shm-usage",
+      "--disable-gpu"
+    ]
   });
 
   const page = await browser.newPage();
@@ -314,7 +425,15 @@ Translate this technical payload from "${sourceLang}" to "${targetLang}":
     path: outputPath,
     format: "A4",
     printBackground: true,
-    margin: { top: "10mm", bottom: "10mm", left: "10mm", right: "10mm" }
+    displayHeaderFooter: true,
+    headerTemplate: '<div></div>',
+    footerTemplate: `
+      <div style="width: 100%; font-size: 8px; font-family: monospace; color: #94a3b8; display: flex; justify-content: space-between; padding: 0 12mm; box-sizing: border-box;">
+        <span>REF: ${projectCode} // MIU SOVEREIGN CORE ${!isPaid ? "[UNPAID PROFORMA]" : "[OFFICIAL SEAL]"}</span>
+        <span>PAGE <span class="pageNumber"></span> OF <span class="totalPages"></span></span>
+      </div>
+    `,
+    margin: { top: "14mm", bottom: "18mm", left: "12mm", right: "12mm" }
   });
   await browser.close();
 
@@ -323,6 +442,7 @@ Translate this technical payload from "${sourceLang}" to "${targetLang}":
     outputPath,
     targetLang,
     sector,
-    projectCode
+    projectCode,
+    isPaid
   };
 }
