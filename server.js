@@ -28,6 +28,7 @@ import { stitchMasterWalkthrough } from "./services/media/videoStitcher.js";
 import { requireMeteredAuth } from "./middleware/authMeter.js";
 import { generatePitchOnePagerPdf } from "./services/docs/pitchOnePagerEngine.js";
 import { uploadDossierAndGetPresignedUrl } from "./services/cloud/s3Dispatcher.js";
+import { evaluateCompliance } from "./services/docs/dualTrackEngine.js";
 
 const app = express();
 app.use(cors({ origin: true, credentials: true }));
@@ -431,6 +432,34 @@ app.get("/api/services/logistics-pipeline", (req, res) => {
       fasahCustoms: { sasoCertificate: pipeline.compliance.sasoCertificate, dutyAssessed: "5% GCC Common External Tariff" }
     }
   });
+});
+
+// ============================================================================
+// DUAL-TRACK COMPLIANCE ROUTER (AEC + FMCG / PERISHABLES)
+// ============================================================================
+app.post("/api/transport/multi-vertical-ingest", async (req, res) => {
+  try {
+    const { track, metadata, shipment } = req.body;
+    if (!track || !shipment) {
+      return res.status(400).json({ success: false, error: "'track' and 'shipment' are required." });
+    }
+
+    const result = evaluateCompliance({ track, metadata, shipment });
+
+    saveDirectiveLog({
+      input: `MULTI_VERTICAL_INGEST [${track.toUpperCase()}]`,
+      context: "cross_border_compliance",
+      response: `Landed: ${result.financials.totalLandedCostSAR} SAR`
+    });
+
+    res.json({
+      success: true,
+      timestamp: new Date().toISOString(),
+      ...result
+    });
+  } catch (err) {
+    res.status(400).json({ success: false, error: err.message });
+  }
 });
 
 // ============================================================================
