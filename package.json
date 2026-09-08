@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "start": "node server.js",
-    "purge": "node purge.js"
+    "purge": "node purge.js",
+    "postinstall": "puppeteer browsers install chrome"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1124.0",
