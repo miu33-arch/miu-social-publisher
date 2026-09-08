@@ -327,11 +327,21 @@ Items: ${JSON.stringify(processedItems.map(i => ({ code: i.code, name: i.name })
     </html>
   `;
 
-  const browser = await puppeteer.launch({
+ const launchOptions = {
     headless: "new",
-    executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || "/usr/bin/chromium",
-    args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
-  });
+    args: [
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-dev-shm-usage"
+    ]
+  };
+
+  if (process.env.PUPPETEER_EXECUTABLE_PATH && fs.existsSync(process.env.PUPPETEER_EXECUTABLE_PATH)) {
+    launchOptions.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
+  }
+
+  const browser = await puppeteer.launch(launchOptions);
+  
   const page = await browser.newPage();
   await page.setContent(htmlDoc, { waitUntil: "networkidle0" });
   await page.pdf({
