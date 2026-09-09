@@ -18,7 +18,7 @@ try {
 
 // Core system & intelligence imports
 import { processCompanionDirective, processBatchDirectives } from "./services/core/localCompanion.js";
-import { saveDirectiveLog, getDirectiveLogs, createApiClient, getClientByKey } from "./services/core/dbStore.js";
+import { saveDirectiveLog, getDirectiveLogs, createApiClient, getClientByKey, recordInvoiceAudit } from "./services/core/dbStore.js";
 
 // Document, submittal & invoicing engines
 import { processTechnicalSpecSheet } from "./services/docs/specSheetEngine.js";
@@ -560,12 +560,17 @@ app.post("/api/services/saber-saso", requireMeteredAuth("batch_export"), async (
       </html>
     `;
 
-    const puppeteer = (await import("puppeteer")).default;
-    const browser = await puppeteer.launch({ 
+   const launchOptions = {
       headless: "new",
-      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || "/usr/bin/chromium",
-      args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"] 
-    });
+      args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
+    };
+
+    if (process.env.PUPPETEER_EXECUTABLE_PATH && fs.existsSync(process.env.PUPPETEER_EXECUTABLE_PATH)) {
+      launchOptions.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
+    }
+
+    const browser = await puppeteer.launch(launchOptions);
+    
     const page = await browser.newPage();
     await page.setContent(htmlDoc, { waitUntil: "networkidle0" });
     await page.pdf({ path: pdfPath, format: "A4", printBackground: true, margin: { top: "10mm", bottom: "10mm", left: "10mm", right: "10mm" } });
@@ -889,6 +894,18 @@ app.post("/api/services/invoice", requireMeteredAuth("batch_export"), async (req
       targetLang: targetLang || "dual",
       items: processedItems
     });
+    // Persist immutable tax invoice record to SQLite ledger
+    if (typeof recordInvoiceAudit === "function") {
+      recordInvoiceAudit({
+        invoiceNumber: result.invoiceNumber,
+        clientName: clientName || (req.apiClient && req.apiClient.clientName) || "AL-RAJHI COMMERCIAL CONTRACTING",
+        clientTaxId: clientTaxId || "300000000000003",
+        subtotal: result.subtotal,
+        vatAmount: result.vatAmount,
+        grandTotal: result.grandTotal,
+        currency: result.currency || currency
+      });
+    }
 
     const fileName = path.basename(result.outputPath);
     const targetPath = path.join(outputsDir, fileName);
