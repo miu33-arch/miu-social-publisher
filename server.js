@@ -18,7 +18,14 @@ try {
 
 // Core system & intelligence imports
 import { processCompanionDirective, processBatchDirectives } from "./services/core/localCompanion.js";
-import { saveDirectiveLog, getDirectiveLogs, createApiClient, getClientByKey, recordInvoiceAudit } from "./services/core/dbStore.js";
+import { 
+  saveDirectiveLog, 
+  getDirectiveLogs, 
+  createApiClient, 
+  getClientByKey, 
+  recordInvoiceAudit,
+  getInvoiceHistory 
+} from "./services/core/dbStore.js";
 
 // Document, submittal & invoicing engines
 import { processTechnicalSpecSheet } from "./services/docs/specSheetEngine.js";
@@ -570,7 +577,7 @@ app.post("/api/services/saber-saso", requireMeteredAuth("batch_export"), async (
     }
 
     const browser = await puppeteer.launch(launchOptions);
-    
+
     const page = await browser.newPage();
     await page.setContent(htmlDoc, { waitUntil: "networkidle0" });
     await page.pdf({ path: pdfPath, format: "A4", printBackground: true, margin: { top: "10mm", bottom: "10mm", left: "10mm", right: "10mm" } });
@@ -894,6 +901,7 @@ app.post("/api/services/invoice", requireMeteredAuth("batch_export"), async (req
       targetLang: targetLang || "dual",
       items: processedItems
     });
+
     // Persist immutable tax invoice record to SQLite ledger
     if (typeof recordInvoiceAudit === "function") {
       recordInvoiceAudit({
@@ -933,6 +941,17 @@ app.post("/api/services/invoice", requireMeteredAuth("batch_export"), async (req
       billing,
       timestamp: new Date().toISOString()
     });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Query persisted municipal invoice ledger
+app.get("/api/services/invoices", (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit, 10) || 50;
+    const invoices = getInvoiceHistory(limit);
+    res.json({ success: true, count: invoices.length, invoices });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
