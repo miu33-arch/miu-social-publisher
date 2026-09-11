@@ -24,14 +24,18 @@ import {
   createApiClient, 
   getClientByKey, 
   recordInvoiceAudit,
-  getInvoiceHistory 
+  getInvoiceHistory,
+  getLatestInvoiceHash,
+  verifyInvoiceChain
 } from "./services/core/dbStore.js";
 
 // Document, submittal & invoicing engines
 import { processTechnicalSpecSheet } from "./services/docs/specSheetEngine.js";
 import { generateInvoicePdf } from "./services/docs/invoiceEngine.js";
+import { generateZatcaUblXml } from "./services/docs/ublXmlEngine.js";
 import { generateArchitecturalHud } from "./services/media/hudTelemetry.js";
 import { stitchMasterWalkthrough } from "./services/media/videoStitcher.js";
+import { enforceCleanPayload } from "./middleware/schemaGuard.js";
 import { requireMeteredAuth } from "./middleware/authMeter.js";
 import { generatePitchOnePagerPdf } from "./services/docs/pitchOnePagerEngine.js";
 import { uploadDossierAndGetPresignedUrl } from "./services/cloud/s3Dispatcher.js";
@@ -869,7 +873,7 @@ app.post("/api/services/spec-sheet", async (req, res) => {
 // ============================================================================
 // SERVICE 6: TRILINGUAL ZATCA TAX INVOICE ENGINE
 // ============================================================================
-app.post("/api/services/invoice", requireMeteredAuth("batch_export"), async (req, res) => {
+app.post("/api/services/invoice", requireMeteredAuth("batch_export"), enforceCleanPayload, async (req, res) => {
   try {
     const { clientName, clientTaxId, invoiceNumber, currency = "SAR", vatRate, targetLang, items } = req.body;
 
@@ -891,10 +895,13 @@ app.post("/api/services/invoice", requireMeteredAuth("batch_export"), async (req
     }
 
     const parsedVatRate = vatRate !== undefined ? Number(vatRate) : 0.15;
+    const resolvedClient = clientName || (req.apiClient && req.apiClient.clientName) || "AL-RAJHI COMMERCIAL CONTRACTING";
+    const resolvedTaxId = clientTaxId || "300000000000003";
 
+    // 1. Generate Trilingual PDF with Phase-1/2 TLV Base64 QR code
     const result = await generateInvoicePdf({
-      clientName: clientName || (req.apiClient && req.apiClient.clientName) || "AL-RAJHI COMMERCIAL CONTRACTING",
-      clientTaxId: clientTaxId || "300000000000003",
+      clientName: resolvedClient,
+      clientTaxId: resolvedTaxId,
       invoiceNumber: invoiceNumber || `INV-${Date.now().toString().slice(-6)}`,
       currency,
       vatRate: parsedVatRate,
@@ -902,16 +909,53 @@ app.post("/api/services/invoice", requireMeteredAuth("batch_export"), async (req
       items: processedItems
     });
 
-    // Persist immutable tax invoice record to SQLite ledger
+    // 2. Cryptographic Chaining: Fetch Previous Invoice Hash (PIH)
+    const previousInvoiceHash = getLatestInvoiceHash();
+
+    // 3. Generate standard ZATCA Phase-2 UBL 2.1 XML document & SHA-256 Hash
+    const xmlResult = generateZatcaUblXml({
+      invoiceNumber: result.invoiceNumber,
+      seller: {
+        crn: "1010899421",
+        vatId: "310000000000003",
+        street: "King Fahd Road",
+        building: "7720",
+        postalCode: "12214",
+        city: "Riyadh",
+        district: "Al-Olaya",
+        legalName: "MIU SOVEREIGN DIGITAL ARCHITECT STUDIO"
+      },
+      buyer: {
+        name: resolvedClient,
+        vatId: resolvedTaxId,
+        street: "King Abdulaziz Road",
+        building: "1024",
+        postalCode: "12345",
+        city: "Riyadh",
+        district: "Al-Malaz"
+      },
+      items: processedItems || [],
+      currency: result.currency || currency,
+      subtotal: result.subtotal,
+      vatAmount: result.vatAmount,
+      grandTotal: result.grandTotal,
+      previousInvoiceHash,
+      outputsDir: outputsDir
+    });
+
+    // 4. Persist immutable tax invoice & cryptographic chain to SQLite ledger
     if (typeof recordInvoiceAudit === "function") {
       recordInvoiceAudit({
         invoiceNumber: result.invoiceNumber,
-        clientName: clientName || (req.apiClient && req.apiClient.clientName) || "AL-RAJHI COMMERCIAL CONTRACTING",
-        clientTaxId: clientTaxId || "300000000000003",
+        clientName: resolvedClient,
+        clientTaxId: resolvedTaxId,
         subtotal: result.subtotal,
         vatAmount: result.vatAmount,
         grandTotal: result.grandTotal,
-        currency: result.currency || currency
+        currency: result.currency || currency,
+        invoiceHash: xmlResult.invoiceHash,
+        previousInvoiceHash,
+        xmlPath: xmlResult.xmlPath
       });
     }
 
@@ -931,13 +975,16 @@ app.post("/api/services/invoice", requireMeteredAuth("batch_export"), async (req
     saveDirectiveLog({
       input: `TAX_INVOICE_GENERATION [${result.invoiceNumber}] (${req.apiClient.clientName})`,
       context: "invoicing",
-      response: `Issued ${result.grandTotal || result.total || "N/A"} ${result.currency || currency} -> ${fileName}`
+      response: `Issued ${result.grandTotal || result.total || "N/A"} ${result.currency || currency} -> PDF: ${fileName} | XML: ${xmlResult.fileName}`
     });
 
     res.json({
       success: true,
       ...result,
+      invoiceHash: xmlResult.invoiceHash,
+      previousInvoiceHash,
       downloadUrl: `${BASE_URL}/outputs/${fileName}`,
+      xmlDownloadUrl: `${BASE_URL}/outputs/${xmlResult.fileName}`,
       billing,
       timestamp: new Date().toISOString()
     });
@@ -957,6 +1004,15 @@ app.get("/api/services/invoices", (req, res) => {
   }
 });
 
+// Cryptographic Ledger Chain Integrity Audit Endpoint
+app.get("/api/services/invoices/verify-chain", (req, res) => {
+  try {
+    const auditResult = verifyInvoiceChain();
+    res.json({ success: true, ...auditResult });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
 // ============================================================================
 // SERVICE 7: MULTI-ARTIFACT PROJECT DOSSIER ZIPPER (AWAIT STREAM FLUSH)
 // ============================================================================
@@ -1204,6 +1260,6 @@ setInterval(() => {
   }
 }, 60 * 60 * 1000);
 
-app.listen(PORT, () => {
-  console.log(`\n⚡ MIU Sovereign AEC Core running on ${BASE_URL} (Port ${PORT})`);
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`\n⚡ MIU Sovereign AEC Core running on http://127.0.0.1:${PORT} and http://localhost:${PORT}`);
 });

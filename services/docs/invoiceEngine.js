@@ -343,7 +343,15 @@ Items: ${JSON.stringify(processedItems.map(i => ({ code: i.code, name: i.name })
   const browser = await puppeteer.launch(launchOptions);
   
   const page = await browser.newPage();
-  await page.setContent(htmlDoc, { waitUntil: "networkidle0" });
+  page.setDefaultNavigationTimeout(15000);
+
+  await page.setContent(htmlDoc, { 
+    waitUntil: "domcontentloaded",
+    timeout: 15000 
+  });
+
+  await new Promise((r) => setTimeout(r, 250));
+
   await page.pdf({
     path: outputPath,
     format: "A4",

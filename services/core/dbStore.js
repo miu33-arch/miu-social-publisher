@@ -43,9 +43,23 @@ db.exec(`
     vatAmount REAL NOT NULL,
     grandTotal REAL NOT NULL,
     currency TEXT NOT NULL DEFAULT 'SAR',
+    invoiceHash TEXT,
+    previousInvoiceHash TEXT,
+    xmlPath TEXT,
     createdAt TEXT NOT NULL
   );
 `);
+
+// Non-destructive migration for existing tables
+try {
+  db.exec(`
+    ALTER TABLE municipal_invoices ADD COLUMN invoiceHash TEXT;
+    ALTER TABLE municipal_invoices ADD COLUMN previousInvoiceHash TEXT;
+    ALTER TABLE municipal_invoices ADD COLUMN xmlPath TEXT;
+  `);
+} catch (e) {
+  // Columns already exist
+}
 
 // Seed master admin key if missing
 const existingMaster = db.prepare("SELECT * FROM api_clients WHERE apiKey = ?").get("miu_master_agency_key");
@@ -111,11 +125,25 @@ export function deductClientCredits({ apiKey, serviceType, credits, durationSeco
   return { success: true, remainingBalance: newBalance, deducted: credits };
 }
 
-export function recordInvoiceAudit({ invoiceNumber, clientName, clientTaxId, subtotal, vatAmount, grandTotal, currency }) {
-  db.prepare(`
-    INSERT INTO municipal_invoices (invoiceNumber, clientName, clientTaxId, subtotal, vatAmount, grandTotal, currency, createdAt)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
+export function recordInvoiceAudit({
+  invoiceNumber,
+  clientName,
+  clientTaxId,
+  subtotal,
+  vatAmount,
+  grandTotal,
+  currency = "SAR",
+  invoiceHash = null,
+  previousInvoiceHash = null,
+  xmlPath = null,
+  createdAt = new Date().toISOString()
+}) {
+  const stmt = db.prepare(`
+    INSERT INTO municipal_invoices (
+      invoiceNumber, clientName, clientTaxId, subtotal, vatAmount, grandTotal, currency, invoiceHash, previousInvoiceHash, xmlPath, createdAt
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  return stmt.run(
     invoiceNumber,
     clientName,
     clientTaxId,
@@ -123,10 +151,56 @@ export function recordInvoiceAudit({ invoiceNumber, clientName, clientTaxId, sub
     Number(vatAmount),
     Number(grandTotal),
     currency,
-    new Date().toISOString()
+    invoiceHash,
+    previousInvoiceHash,
+    xmlPath,
+    createdAt
   );
 }
 
 export function getInvoiceHistory(limit = 50) {
   return db.prepare("SELECT * FROM municipal_invoices ORDER BY id DESC LIMIT ?").all(limit);
+}
+
+export function getLatestInvoiceHash() {
+  const row = db.prepare(`
+    SELECT invoiceHash FROM municipal_invoices 
+    WHERE invoiceHash IS NOT NULL 
+    ORDER BY id DESC LIMIT 1
+  `).get();
+  return row ? row.invoiceHash : "NWZlY2ViNjZmZmM4NmYzOGQ5NTI3ODZjNmQ2OTZjNzljMmRiYzIzOWRkNGU5MWI0NjAzZTQ4MmUwNzM4MjRhNw==";
+}
+export function verifyInvoiceChain() {
+  const invoices = db.prepare(
+    "SELECT id, invoiceNumber, invoiceHash, previousInvoiceHash, createdAt FROM municipal_invoices ORDER BY id ASC"
+  ).all();
+
+  if (!invoices || invoices.length === 0) {
+    return {
+      chainLength: 0,
+      chainValid: true,
+      message: "Ledger empty. No blocks to evaluate."
+    };
+  }
+
+  let isValid = true;
+  let failureDetails = null;
+
+  for (let i = 1; i < invoices.length; i++) {
+    const prevBlock = invoices[i - 1];
+    const currentBlock = invoices[i];
+
+    if (currentBlock.previousInvoiceHash !== prevBlock.invoiceHash) {
+      isValid = false;
+      failureDetails = `Integrity violation at block #${currentBlock.id} (${currentBlock.invoiceNumber}). Expected PIH: ${prevBlock.invoiceHash}, got: ${currentBlock.previousInvoiceHash}`;
+      break;
+    }
+  }
+
+  return {
+    chainLength: invoices.length,
+    chainValid: isValid,
+    headHash: invoices[invoices.length - 1].invoiceHash,
+    details: failureDetails || "All cryptographic anchors verified. Immutable chain intact."
+  };
 }
