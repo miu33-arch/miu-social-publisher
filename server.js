@@ -1242,10 +1242,21 @@ app.post("/api/companion/batch", async (req, res) => {
   }
 });
 
+app.get("/api/companion/balance", (req, res) => {
+  res.json({
+    success: true,
+    balance: {
+      computeRemaining: "Sovereign Tier",
+      currency: "SAR",
+      status: "Active"
+    }
+  });
+});
+
 app.get("/api/companion/history", (req, res) => {
   try {
     const logs = getDirectiveLogs();
-    res.json({ success: true, logs });
+    res.json({ success: true, history: logs, logs });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
