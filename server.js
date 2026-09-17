@@ -42,7 +42,22 @@ import { uploadDossierAndGetPresignedUrl } from "./services/cloud/s3Dispatcher.j
 import { evaluateCompliance } from "./services/docs/dualTrackEngine.js";
 
 const app = express();
-app.use(cors({ origin: true, credentials: true }));
+
+app.use(
+  cors({
+    origin: [
+      "https://miu33archstudio.xyz",
+      "https://www.miu33archstudio.xyz",
+      "http://localhost:3000",
+      "http://127.0.0.1:3000",
+    ],
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization", "x-api-key", "x-miu-agency-key"],
+  })
+);
+
+app.options("*", cors());
 app.use(express.json());
 
 const PORT = process.env.PORT || 5000;
