@@ -15,7 +15,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     zip \
     && rm -rf /var/lib/apt/lists/*
 
-# Prevent Puppeteer from attempting browser downloads (covers both old and new flags)
+# Prevent Puppeteer from attempting browser downloads
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium \
     PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
     PUPPETEER_SKIP_DOWNLOAD=true \
@@ -24,7 +24,7 @@ ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium \
 WORKDIR /app
 
 # 1. Copy package manifests
-COPY package.json ./
+COPY package.json package-lock.json* ./
 
 # 2. Install dependencies without triggering the Puppeteer chrome downloader
 RUN npm install --include=dev --legacy-peer-deps --ignore-scripts

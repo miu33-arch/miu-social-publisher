@@ -8,6 +8,7 @@ import crypto from "crypto";
 import { exec } from "child_process";
 import { createRequire } from "module";
 import puppeteer from "puppeteer";
+import { processCustomsManifest } from "./services/core/customsAgent.js";
 
 const require = createRequire(import.meta.url);
 let archiver;
@@ -58,7 +59,7 @@ app.use(
   })
 );
 
-app.options("*", cors());
+
 app.use(express.json());
 
 const PORT = process.env.PORT || 5000;
@@ -340,6 +341,24 @@ app.post("/api/transport/ingest", upload.single("manifestFile"), async (req, res
     res.json({ success: true, pipeline: pipelineState });
   } catch (err) {
     console.error("[TRANSPORT_INGEST_ERROR]", err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ============================================================================
+// AGENTIC CUSTOMS AUDIT (geMiu SLM + DETERMINISTIC COMPLIANCE)
+// ============================================================================
+app.post("/api/transport/customs-agent-audit", async (req, res) => {
+  try {
+    const { documentText } = req.body;
+    if (!documentText) {
+      return res.status(400).json({ success: false, error: "Missing documentText" });
+    }
+
+    const auditResult = await processCustomsManifest(documentText);
+    res.json({ success: true, audit: auditResult });
+  } catch (err) {
+    console.error("[CUSTOMS_AGENT_ERROR]", err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
