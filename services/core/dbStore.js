@@ -1,7 +1,7 @@
 import Database from "better-sqlite3";
 import path from "path";
 
-const dbPath = path.resolve("./sovereign_ledger.db");
+const dbPath = path.resolve("./data/sovereign_ledger.db");
 const db = new Database(dbPath);
 
 // Enable Write-Ahead Logging for fast concurrent execution

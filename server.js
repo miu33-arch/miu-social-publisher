@@ -1,3 +1,4 @@
+import QRCode from "qrcode";
 import "dotenv/config";
 import express from "express";
 import cors from "cors";
@@ -1539,6 +1540,20 @@ setInterval(() => {
   }
 }, 60 * 60 * 1000);
 
+// Sovereign ZATCA QR Endpoint
+app.get("/api/services/zatca-qr", async (req, res) => {
+  try {
+    const data = req.query.data || "";
+    if (!data) return res.status(400).send("Missing data");
+    const svg = await QRCode.toString(data, { type: "svg", margin: 1, color: { dark: "#0f172a", light: "#ffffff" } });
+    res.setHeader("Content-Type", "image/svg+xml");
+    res.send(svg);
+  } catch (err) {
+    res.status(500).send(err.message);
+  }
+});
+
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`\n⚡ MIU Sovereign AEC Core running on http://127.0.0.1:${PORT} and http://localhost:${PORT}`);
 });
+
