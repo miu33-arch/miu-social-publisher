@@ -1,7 +1,14 @@
 import Database from "better-sqlite3";
 import path from "path";
+import fs from "fs";
 
 const dbPath = path.resolve("./data/sovereign_ledger.db");
+const dir = path.dirname(dbPath);
+
+// Ensure the directory exists before initializing the database
+if (!fs.existsSync(dir)) {
+  fs.mkdirSync(dir, { recursive: true });
+}
 const db = new Database(dbPath);
 
 // Enable Write-Ahead Logging for fast concurrent execution
