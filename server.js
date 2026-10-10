@@ -51,8 +51,11 @@ app.use(
     origin: [
       "https://miu33archstudio.xyz",
       "https://www.miu33archstudio.xyz",
+      "http://77.42.18.249",
+      "https://77.42.18.249",
       "http://localhost:3000",
       "http://127.0.0.1:3000",
+      // O kaya gamitin: true (para i-reflect ang origin kung private dashboard)
     ],
     credentials: true,
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
